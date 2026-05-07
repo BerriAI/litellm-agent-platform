@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -64,25 +63,24 @@ export function Sidebar() {
       className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
       aria-label="Primary sidebar"
     >
-      {/* Logo + product title */}
-      <div className="flex flex-col gap-1 px-4 pt-4 pb-3">
+      {/* Wordmark */}
+      <div className="flex flex-col gap-0.5 px-4 pt-4 pb-3">
         <Link
           href="/"
           aria-label="LiteLLM Agent Platform home"
-          className="flex shrink-0 items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="inline-flex shrink-0 items-center gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
-          <Image
-            src="https://berrie-ai-incorporated.litellm-sandbox.ai/get_image"
-            alt="LiteLLM"
-            width={120}
-            height={24}
-            priority
-            className="h-6 w-auto"
-            style={{ height: 24, width: "auto" }}
-            sizes="120px"
-          />
+          <span
+            aria-hidden
+            className="grid h-5 w-5 place-items-center rounded-[5px] bg-foreground text-[10px] font-semibold tracking-tight text-background"
+          >
+            L
+          </span>
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">
+            LiteLLM
+          </span>
         </Link>
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        <span className="ml-7 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Agent Platform
         </span>
       </div>
