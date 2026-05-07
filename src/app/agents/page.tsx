@@ -74,9 +74,14 @@ export default function AgentsListPage() {
   }, [load]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Agents</h1>
+    <div className="mx-auto w-full max-w-6xl px-6 py-8">
+      <div className="flex items-center justify-between">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-[22px] font-semibold tracking-tight">Agents</h1>
+          <p className="text-sm tabular-nums text-muted-foreground">
+            {rows.length}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -99,30 +104,20 @@ export default function AgentsListPage() {
       </div>
 
       {error ? (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
+        <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
           {error}
         </div>
       ) : null}
 
-      <div className="rounded-lg border">
+      <div className="mt-6 overflow-hidden rounded-lg border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-12 text-xs uppercase tracking-wide text-muted-foreground">
-                Status
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                Name
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                Model
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                ID
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                Created
-              </TableHead>
+              <TableHead className="w-12">Status</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Model</TableHead>
+              <TableHead>ID</TableHead>
+              <TableHead>Created</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -140,7 +135,7 @@ export default function AgentsListPage() {
                 <TableRow
                   key={agent.id}
                   onClick={() => router.push(`/agents/${agent.id}`)}
-                  className="cursor-pointer"
+                  className="cursor-pointer hover:bg-muted/40"
                 >
                   <TableCell>
                     <span
@@ -165,7 +160,7 @@ export default function AgentsListPage() {
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {agent.id}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
+                  <TableCell className="tabular-nums text-muted-foreground">
                     {formatCreated(agent.created_at)}
                   </TableCell>
                 </TableRow>

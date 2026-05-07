@@ -88,8 +88,8 @@ export default function NewAgentPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <div className="mb-6">
+    <div className="mx-auto w-full max-w-2xl px-6 py-8">
+      <div>
         <Link
           href="/agents"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -99,12 +99,19 @@ export default function NewAgentPage() {
         </Link>
       </div>
 
-      <Card>
-        <CardHeader>
+      <div className="mt-6">
+        <h1 className="text-[22px] font-semibold tracking-tight">New Agent</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Define the model, system prompt, and tools. The agent is a pure
+          definition — sandboxes are created per session.
+        </p>
+      </div>
+
+      <Card className="mt-6">
+        <CardHeader className="sr-only">
           <CardTitle>New Agent</CardTitle>
           <CardDescription>
-            Define the model, system prompt, and tools. The agent is a pure
-            definition — sandboxes are created per session.
+            Define the model, system prompt, and tools.
           </CardDescription>
         </CardHeader>
         <CardContent>

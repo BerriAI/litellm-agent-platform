@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
-import { TopNav } from "@/components/top-nav";
+import { ThemeProvider } from "@/components/theme-provider";
+import { Sidebar } from "@/components/sidebar";
 
 import "./globals.css";
 
@@ -28,13 +29,23 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full`}
     >
-      <body className="flex h-full flex-col bg-background text-foreground antialiased">
-        <TopNav />
-        <main className="flex flex-1 min-h-0 flex-col overflow-y-auto">
-          {children}
-        </main>
+      <body className="h-full bg-background text-foreground antialiased">
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <div className="flex h-full">
+            <Sidebar />
+            <main className="flex flex-1 min-h-0 flex-col overflow-y-auto">
+              {children}
+            </main>
+          </div>
+        </ThemeProvider>
       </body>
     </html>
   );

@@ -129,16 +129,16 @@ export default function SessionsListPage() {
   }, [sessions, activeFilter]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-10">
-      <header className="mb-4 flex items-center justify-between">
+    <div className="mx-auto w-full max-w-6xl px-6 py-8">
+      <header className="flex items-center justify-between">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
-          <span className="text-sm tabular-nums text-muted-foreground">
+          <h1 className="text-[22px] font-semibold tracking-tight">Sessions</h1>
+          <p className="text-sm tabular-nums text-muted-foreground">
             {sessions.length}
-          </span>
+          </p>
         </div>
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           onClick={() => void load()}
           disabled={loading}
@@ -150,7 +150,7 @@ export default function SessionsListPage() {
       </header>
 
       {agentChips.length > 0 ? (
-        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        <div className="mt-6 flex flex-wrap items-center gap-1.5">
           <FilterChip
             label="All"
             count={sessions.length}
@@ -170,30 +170,20 @@ export default function SessionsListPage() {
       ) : null}
 
       {error ? (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
+        <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
           {error}
         </div>
       ) : null}
 
-      <div className="rounded-lg border">
+      <div className="mt-6 overflow-hidden rounded-lg border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-12 text-xs uppercase tracking-wide text-muted-foreground">
-                Status
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                ID
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                Agent
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                Sandbox
-              </TableHead>
-              <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                Created
-              </TableHead>
+              <TableHead className="w-12">Status</TableHead>
+              <TableHead>ID</TableHead>
+              <TableHead>Agent</TableHead>
+              <TableHead>Sandbox</TableHead>
+              <TableHead>Created</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -216,7 +206,7 @@ export default function SessionsListPage() {
                   <TableRow
                     key={s.id}
                     onClick={() => router.push(`/sessions/${s.id}`)}
-                    className="cursor-pointer"
+                    className="cursor-pointer hover:bg-muted/40"
                   >
                     <TableCell>
                       <span
@@ -275,17 +265,17 @@ function FilterChip({ label, count, active, onClick }: FilterChipProps) {
       onClick={onClick}
       aria-pressed={active}
       className={
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none " +
+        "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none " +
         (active
-          ? "border-foreground bg-foreground text-background"
-          : "border-border bg-background text-foreground hover:bg-muted")
+          ? "border-border bg-accent text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground")
       }
     >
-      <span>{label}</span>
+      <span className="font-medium">{label}</span>
       <span
         className={
-          "tabular-nums " +
-          (active ? "text-background/70" : "text-muted-foreground")
+          "tabular-nums text-[11px] " +
+          (active ? "text-muted-foreground" : "text-muted-foreground/70")
         }
       >
         {count}

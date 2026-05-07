@@ -91,8 +91,8 @@ export default function AgentDetailPage({ params }: PageProps) {
   }, [load]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-10">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="mx-auto w-full max-w-6xl px-6 py-8">
+      <div className="flex items-center justify-between">
         <Link
           href="/agents"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -113,15 +113,15 @@ export default function AgentDetailPage({ params }: PageProps) {
       </div>
 
       {error ? (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
+        <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
           {error}
         </div>
       ) : null}
 
       {agent ? (
         <>
-          <div className="mb-6">
-            <h1 className="text-2xl font-semibold tracking-tight">
+          <div className="mt-6">
+            <h1 className="text-[22px] font-semibold tracking-tight">
               {agent.name}
             </h1>
             <p className="mt-1 font-mono text-xs text-muted-foreground">
@@ -129,7 +129,7 @@ export default function AgentDetailPage({ params }: PageProps) {
             </p>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="mt-6 grid gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Configuration</CardTitle>
@@ -203,7 +203,7 @@ export default function AgentDetailPage({ params }: PageProps) {
 
                 <Separator />
 
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <div className="flex items-center justify-between text-xs tabular-nums text-muted-foreground">
                   <span>Created {formatTime(agent.created_at)}</span>
                   <span>Updated {formatTime(agent.updated_at)}</span>
                 </div>
@@ -226,15 +226,9 @@ export default function AgentDetailPage({ params }: PageProps) {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Status
-                        </TableHead>
-                        <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                          ID
-                        </TableHead>
-                        <TableHead className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Created
-                        </TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>ID</TableHead>
+                        <TableHead>Created</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -242,7 +236,7 @@ export default function AgentDetailPage({ params }: PageProps) {
                         <TableRow
                           key={session.id}
                           onClick={() => router.push(`/sessions/${session.id}`)}
-                          className="cursor-pointer"
+                          className="cursor-pointer hover:bg-muted/40"
                         >
                           <TableCell>
                             <Badge variant={statusVariant(session.status)}>
@@ -252,7 +246,7 @@ export default function AgentDetailPage({ params }: PageProps) {
                           <TableCell className="font-mono text-xs">
                             {session.id}
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
+                          <TableCell className="text-xs tabular-nums text-muted-foreground">
                             {formatTime(session.created_at)}
                           </TableCell>
                         </TableRow>

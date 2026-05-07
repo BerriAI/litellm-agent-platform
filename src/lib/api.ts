@@ -224,6 +224,17 @@ export function listSessions(
   return api<ListResponse<SessionRow>>("GET", `/v2/sessions?limit=${limit}`);
 }
 
+export interface CreateSessionRequest {
+  agent_id: string;
+  sandbox: SandboxSpec;
+  repos: RepoSpec[];
+  env_vars?: Record<string, string>;
+}
+
+export function createSession(req: CreateSessionRequest): Promise<SessionRow> {
+  return api<SessionRow>("POST", "/v2/sessions", req);
+}
+
 export function listSessionsForAgent(
   agentId: string,
 ): Promise<ListResponse<SessionRow>> {

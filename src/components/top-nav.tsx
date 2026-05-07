@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
 interface NavTab {
@@ -59,13 +60,14 @@ export function TopNav() {
           className="flex shrink-0 items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Image
-            src="/litellm-logo.jpeg"
+            src="https://berrie-ai-incorporated.litellm-sandbox.ai/get_image"
             alt="LiteLLM"
-            width={94}
+            width={120}
             height={24}
             priority
             className="h-6 w-auto"
-            sizes="94px"
+            style={{ height: 24, width: "auto" }}
+            sizes="120px"
           />
         </Link>
 
@@ -103,6 +105,7 @@ export function TopNav() {
             <kbd className="font-sans">⌘</kbd>
             <kbd className="font-sans">K</kbd>
           </span>
+          <ThemeToggle />
           <a
             href={REPO_URL}
             target="_blank"
