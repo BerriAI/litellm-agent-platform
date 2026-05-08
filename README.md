@@ -1,4 +1,4 @@
-# LiteLLM Agent Platform 🚄
+# LiteLLM Agent Platform 🤖
 
 A web UI for managing **agents** and their **sandboxed coding sessions** on a [LiteLLM](https://github.com/BerriAI/litellm) proxy. Each agent is bound to a sandbox template (a harness — opencode, claude-code, etc. — paired with a repo). Spawning a session boots a fresh Fargate task running that harness against that repo, and the proxy handles the lifecycle.
 

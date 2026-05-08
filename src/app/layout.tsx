@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LiteLLM Agents",
+  title: "🤖 LiteLLM Agent Platform",
   description: "Build, run, and observe agents on LiteLLM.",
 };
 
