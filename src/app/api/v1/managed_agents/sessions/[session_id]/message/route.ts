@@ -42,15 +42,16 @@ interface RouteContext {
   params: Promise<{ session_id: string }>;
 }
 
-// undici / Node net error codes that indicate the sandbox host is unreachable
-// rather than a transient app-level error. Matching widens slightly: any
-// `cause.code` in this set OR a top-level message containing "fetch failed"
-// with a connect-timeout cause is treated as terminal for this session.
+// undici / Node net error codes that indicate the sandbox host is definitively
+// unreachable — TCP-handshake or DNS-resolution failures, not mid-request
+// errors. We deliberately exclude codes that fire on transient conditions
+// (`ECONNRESET` from a brief container restart or load-balancer teardown,
+// `UND_ERR_SOCKET` from a keepalive race) — those would permanently kill a
+// recoverable session in <1s, which is worse than letting the reconciler
+// catch it one tick later.
 const HARD_CONNECT_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_SOCKET",
   "ECONNREFUSED",
-  "ECONNRESET",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",

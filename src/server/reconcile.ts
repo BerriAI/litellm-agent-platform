@@ -250,15 +250,18 @@ export async function reconcileOrphans(): Promise<ReconcileResult> {
     // RunTask just returned for but hasn't shown up in ListTasks yet.
     if (s.created_at > ghostGraceCutoff) continue;
     try {
-      await prisma.session.update({
-        where: { session_id: s.session_id },
+      // updateMany with `status: "ready"` guard so a row already flipped
+      // (e.g. by the message route's inline mark or a prior tick) isn't
+      // re-overwritten with our failure_reason.
+      const res = await prisma.session.updateMany({
+        where: { session_id: s.session_id, status: "ready" },
         data: {
           status: "dead",
           failure_reason: "task disappeared",
           stopped_at: new Date(),
         },
       });
-      ghost_killed += 1;
+      if (res.count > 0) ghost_killed += 1;
     } catch (e) {
       console.warn(
         `reconcile: failed to mark ghost session ${s.session_id} dead:`,
