@@ -32,6 +32,6 @@ CONTAINER_ENV_GITHUB_TOKEN=ghp_...   # container sees GITHUB_TOKEN=ghp_...
 ## Architecture
 
 <img width="1997" height="1219" alt="Xnapper-2026-05-08-19 10 50" src="https://raw.githubusercontent.com/BerriAI/litellm-docs/main/static/img/litellm_agent_platform_alpha.png" />
+## Developer Usage
 
-
-
+Hitting the API directly with curl — create an agent, open a session, send a message, read the reply. See [`src/server/DEVELOPER.md`](src/server/DEVELOPER.md) for the full walkthrough.
