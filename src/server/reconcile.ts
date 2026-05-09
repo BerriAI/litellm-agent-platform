@@ -45,9 +45,18 @@ const WARM_DEAD_STATUSES = new Set(["dead", "claimed"]);
 
 /**
  * Stop any Fargate task tagged as a warm pool task whose `WarmTask` row is
- * missing or in a terminal state. Mirrors the session-orphan sweep below
- * for warm-tagged tasks. Brand-new tasks inside the grace window are left
- * alone — the provisioner may not have committed the row yet.
+ * missing or in a terminal state.
+ *
+ * Critical guard: a successful claim hands the underlying ECS task off to a
+ * Session row but does NOT change the task's ECS tags (only `WarmTask`
+ * deletion happens at the DB layer). Without the cross-check below, the
+ * reconciler would see a warm-tagged task with no WarmTask row, decide it's
+ * an orphan past the grace window, and stop the task that the user is
+ * actively using. We resolve the ambiguity by looking up `Session.task_arn`
+ * — if any live (non-DEAD) Session owns the task, skip it unconditionally.
+ *
+ * Brand-new tasks inside the `RECONCILE_NEW_TASK_GRACE_MS` window are also
+ * left alone — the provisioner may not have committed the row yet.
  */
 async function sweepWarmOrphans(
   warm_tagged: Array<{
@@ -58,6 +67,25 @@ async function sweepWarmOrphans(
   now: number,
 ): Promise<number> {
   if (warm_tagged.length === 0) return 0;
+
+  // 1. Cross-check Session by task_arn. A claimed-then-handed-off warm task
+  // shows up here as a warm-tagged ECS task with no WarmTask row but whose
+  // ARN appears on a live Session. We must never stop those.
+  const arns = warm_tagged.map((t) => t.task_arn);
+  const sessions = arns.length
+    ? await prisma.session.findMany({
+        where: { task_arn: { in: arns } },
+        select: { task_arn: true, status: true },
+      })
+    : [];
+  const liveSessionArns = new Set(
+    sessions
+      .filter((s) => !DEAD_STATUSES.has(s.status))
+      .map((s) => s.task_arn)
+      .filter((arn): arn is string => typeof arn === "string"),
+  );
+
+  // 2. Batch the WarmTask lookup.
   const ids = warm_tagged
     .map((t) => t.warm_task_id)
     .filter((v): v is string => typeof v === "string" && v.length > 0);
@@ -70,9 +98,13 @@ async function sweepWarmOrphans(
 
   let stopped = 0;
   for (const task of warm_tagged) {
+    // Owned by a live Session — task is in use, leave it alone.
+    if (liveSessionArns.has(task.task_arn)) continue;
+
     const wid = task.warm_task_id;
     if (!wid) continue;
     const row = byId.get(wid);
+
     if (!row) {
       // Row missing — but respect the grace window so a freshly launched
       // task isn't killed before its row is committed.
