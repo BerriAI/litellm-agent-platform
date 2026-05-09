@@ -165,6 +165,7 @@ FROM managed_agent_warm_task WHERE ready_at IS NOT NULL;
 
 ## Operational notes
 
+- **`DEPLOY_ID` scoping.** Every warm task is launched with a `litellm_deploy_id={env.DEPLOY_ID}` ECS tag (alongside `litellm_agent_id` and `litellm_warm_task_id`). The reconciler only acts on tasks whose `deploy_id` matches its own — so a laptop or CI worker pointing at the same ECS cluster can't stop a production warm task and vice versa. Required to set; the worker refuses to boot without it.
 - **Image rotation.** Pushing a new harness image doesn't invalidate live warm tasks — they keep running the old image until `WARM_POOL_TTL_MINUTES` recycles them. For an immediate cutover, run `UPDATE managed_agent_warm_task SET status='dead' WHERE status='warm'` and the next tick will both stop the old tasks and provision replacements.
 - **Multiple worker instances.** `topUpWarmPool` is safe under concurrent execution — `provisionWarmTask` inserts a row before launching the task, so the next worker's `loadPoolStats` sees the in-flight provision and doesn't double-fire. `claimWarmTask` uses `SKIP LOCKED` for the same reason.
 - **Fresh deploy.** A brand-new deploy starts with an empty pool. The first session create for any agent is cold; the worker tick after that session is committed sees the agent as "recently active" and starts warming. Steady state kicks in after ~1 minute.
