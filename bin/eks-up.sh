@@ -29,8 +29,16 @@
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-litellm-agents}"
-NODE_TYPE="${NODE_TYPE:-t3.medium}"
-NODE_COUNT="${NODE_COUNT:-1}"
+# t3.large: 2 vCPU / 8 GiB. t3.medium (4 GiB) was insufficient — kubelet
+# OOMd under modest concurrent sandbox load (~5-8 opencode pods doing
+# git clone + sqlite migrate at once). Bump default and let operators
+# downsize if their workload is lighter.
+NODE_TYPE="${NODE_TYPE:-t3.large}"
+# Two nodes by default so a single node failure doesn't take the cluster
+# down. Cluster autoscaler can grow up to NODE_MAX (4) if warm pool
+# capacity demands it.
+NODE_COUNT="${NODE_COUNT:-2}"
+NODE_MAX="${NODE_MAX:-4}"
 K8S_VERSION="${K8S_VERSION:-1.30}"
 AGENT_SANDBOX_VERSION="${AGENT_SANDBOX_VERSION:-v0.4.5}"
 NODEPORT_MIN="${K8S_NODEPORT_MIN:-30000}"
@@ -70,7 +78,7 @@ else
     --nodegroup-name default \
     --node-type "$NODE_TYPE" \
     --nodes "$NODE_COUNT" \
-    --nodes-min 1 --nodes-max 4 \
+    --nodes-min 1 --nodes-max "$NODE_MAX" \
     --managed
 fi
 
