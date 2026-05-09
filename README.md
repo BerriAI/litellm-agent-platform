@@ -4,9 +4,10 @@ A self-hosted control plane for **managed agents** on AWS Fargate, talking to a 
 
 Each agent binds `(harness, repo, model, prompt)`. Spawning a session launches a fresh Fargate task running the [opencode](https://opencode.ai) harness, cloned to the configured repo, with the agent's env injected. The TypeScript backend owns Fargate lifecycle (RunTask → wait ready → harness HTTP), Postgres state, and a 60-second reconciler that kills orphan tasks and reaps idle sessions. Frontend, backend, and worker live in one repo.
 
-<img width="1056" height="720" alt="Agent detail" src="https://github.com/user-attachments/assets/13a8ab51-3cf2-493c-ae25-bc7bcacadc4b" />
+<img width="1056" height="720" alt="d3" src="https://github.com/user-attachments/assets/63fbeed7-b3be-4f9a-9e79-6b8170b74f90" />
 
-![Agents list](./docs/screenshots/agents.png)
+
+
 
 ## Architecture
 
