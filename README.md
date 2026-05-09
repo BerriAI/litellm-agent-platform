@@ -70,3 +70,21 @@ Open `http://localhost:3000` → sign in at `/login` with `MASTER_KEY`.
 | any | `/api/mcp-rest/[...path]` → `${LITELLM_API_BASE}/mcp-rest/...` |
 
 All require `Authorization: Bearer <MASTER_KEY>`.
+
+## Harness contract
+
+`/sessions/{id}/message` is a thin passthrough — body and response shape match the [opencode HTTP API](https://github.com/sst/opencode) verbatim. Any container that exposes opencode-compatible `POST /session` and `POST /session/{id}/message` on `CONTAINER_PORT` works. Drop one in `harnesses/<id>/` and re-run `./setup.sh` to bake a new task definition.
+
+The container is launched with these env vars injected (per session, via `RunTask` `containerOverrides.environment`):
+
+| Env | Source |
+| --- | --- |
+| `REPO_URL` | agent `repo_url` (falls back to `PREINSTALLED_GITHUB_REPO`) |
+| `BRANCH` | agent `branch` (default `main`) |
+| `LITELLM_API_BASE` `LITELLM_API_KEY` | host env, passed to the harness for model calls |
+| `LITELLM_DEFAULT_MODEL` | agent `model` |
+| `AGENT_PROMPT` | agent `prompt` |
+| `PORT` | `CONTAINER_PORT` |
+| `<X>` | every host `CONTAINER_ENV_<X>` (prefix stripped) |
+
+The harness only needs to read these at startup (e.g. in `entrypoint.sh`); the platform owns the rest of the lifecycle.
