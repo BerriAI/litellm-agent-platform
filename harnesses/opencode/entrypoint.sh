@@ -16,15 +16,22 @@ case "$BASE" in
   *) BASE="${BASE}/v1" ;;
 esac
 
-# Clone when REPO_URL is set. Token (if present) is fed via credential helper
-# so it never lands in argv, env of child processes, .git/config, or shell
-# history. When REPO_URL is unset, skip cloning and run the harness from an
-# empty workdir.
+# Two token paths, mutually compatible:
+#   * GIT_TOKEN — clone-only. Wiped from env after cloning so the LLM can't
+#     `printenv GIT_TOKEN` it back. Use when the agent must not push.
+#   * GITHUB_TOKEN / GH_TOKEN — persistent. Left in env so `gh pr create` and
+#     `git push` work from the agent shell. A global git credential helper is
+#     configured below so the token never lands in argv or .git/config.
+#
+# CLONE_TOKEN is whichever is set, with GIT_TOKEN winning (more restrictive).
+# When REPO_URL is unset, skip cloning and run the harness from an empty workdir.
+CLONE_TOKEN="${GIT_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
+
 if [ -n "${REPO_URL:-}" ]; then
   if [ ! -d "$REPO_DIR/.git" ]; then
-    if [ -n "${GIT_TOKEN:-}" ]; then
+    if [ -n "$CLONE_TOKEN" ]; then
       git -c credential.helper= \
-          -c "credential.helper=!f() { echo username=x-access-token; echo password=$GIT_TOKEN; }; f" \
+          -c "credential.helper=!f() { echo username=x-access-token; echo password=$CLONE_TOKEN; }; f" \
           clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
     else
       git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
@@ -34,7 +41,8 @@ else
   mkdir -p "$REPO_DIR"
 fi
 
-# Wipe token from env so opencode shell tool can't `printenv GIT_TOKEN`.
+# Wipe GIT_TOKEN (clone-only by design). GITHUB_TOKEN / GH_TOKEN stay set —
+# gh and git push need them at runtime.
 unset GIT_TOKEN
 
 cd "$REPO_DIR"
@@ -42,6 +50,15 @@ cd "$REPO_DIR"
 # Belt-and-suspenders: ensure .git/config has clean remote (no embedded creds).
 if [ -n "${REPO_URL:-}" ]; then
   git remote set-url origin "$REPO_URL" 2>/dev/null || true
+fi
+
+# Persistent path: configure a global credential helper so subsequent
+# `git push` from the agent shell authenticates without the token landing
+# in argv or .git/config. gh auto-detects GITHUB_TOKEN / GH_TOKEN.
+PERSIST_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+if [ -n "$PERSIST_TOKEN" ]; then
+  git config --global credential.helper \
+    "!f() { echo username=x-access-token; echo password=$PERSIST_TOKEN; }; f"
 fi
 
 # Wire LiteLLM as OpenAI-compatible provider
