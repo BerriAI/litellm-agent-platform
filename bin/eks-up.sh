@@ -74,17 +74,20 @@ else
     --managed
 fi
 
-# Open NodePort range on the node security group so web/worker on a
-# different network can reach the per-Sandbox NodePort services.
+# Open the full EKS default NodePort range (30000-32767) on the node
+# security group. EKS's apiserver uses its default Service node-port range
+# and we don't override it from outside, so allocations land anywhere in
+# 30000-32767. Restricting the SG to a subset means most Sandbox spawns
+# would assign a port the platform can't reach.
 NG_SG=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" \
           --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' \
           --output text)
-info "opening NodePort $NODEPORT_MIN-$NODEPORT_MAX on $NG_SG"
+info "opening NodePort 30000-32767 on $NG_SG"
 aws ec2 authorize-security-group-ingress \
   --region "$AWS_REGION" \
   --group-id "$NG_SG" \
   --ip-permissions \
-    "IpProtocol=tcp,FromPort=$NODEPORT_MIN,ToPort=$NODEPORT_MAX,IpRanges=[{CidrIp=0.0.0.0/0}]" \
+    "IpProtocol=tcp,FromPort=30000,ToPort=32767,IpRanges=[{CidrIp=0.0.0.0/0}]" \
   >/dev/null 2>&1 || true   # idempotent — duplicate rule is fine
 
 # ---- 3. agent-sandbox controller ----------------------------------------
