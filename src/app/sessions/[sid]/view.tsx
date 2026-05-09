@@ -370,21 +370,46 @@ export default function SessionThreadView() {
       sendAbortRef.current = ctl;
 
       try {
-        // Stream token deltas live. `message.part.delta` carries text
-        // chunks per partID; we render the running concat into the
-        // in-progress bubble. After `done` we refreshThread() to pull
-        // canonical state (tool/reasoning parts from earlier loop
-        // iterations that the bus events don't reconstruct).
-        const partTexts: Map<string, string> = new Map();
+        // Stream token deltas live. `message.part.delta` carries text or
+        // thinking chunks per partID; we accumulate per-part and render the
+        // result as a list of parts so each block (text, thinking, tool)
+        // renders distinctly. After `done` we refreshThread() to pull
+        // canonical state (tool inputs/outputs that the bus deltas don't
+        // reconstruct on their own).
+        type StreamPart = { id: string; type: "text" | "thinking"; text: string };
+        const partsState: Map<string, StreamPart> = new Map();
         const renderStreaming = () => {
-          const text = Array.from(partTexts.values()).join("");
+          // Stable order: insertion order matches the order parts were first
+          // seen on the bus, which matches the order the model produced
+          // them (thinking before text, etc).
+          const partsArray = Array.from(partsState.values()).map((p) => ({
+            id: p.id,
+            type: p.type,
+            text: p.text,
+          })) as HarnessMessagePart[];
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, text, parts: undefined, status: "in_progress" }
+                ? { ...m, text: undefined, parts: partsArray, status: "in_progress" }
                 : m,
             ),
           );
+        };
+        const ingestDelta = (
+          partID: string,
+          delta: string,
+          field: "text" | "thinking",
+        ) => {
+          const cur = partsState.get(partID) ?? {
+            id: partID,
+            type: field,
+            text: "",
+          };
+          cur.text += delta;
+          // If a partID flips field mid-stream (shouldn't happen, but be
+          // defensive), trust the latest field type.
+          cur.type = field;
+          partsState.set(partID, cur);
         };
         await sendMessageStream(
           sessionId,
@@ -397,23 +422,27 @@ export default function SessionThreadView() {
               const partID = props.partID as string | undefined;
               const delta = props.delta as string | undefined;
               const field = props.field as string | undefined;
-              // `field === "text"` is the assistant's user-visible
-              // output; ignore reasoning so we don't leak
-              // chain-of-thought into the bubble.
-              if (!partID || !delta || field !== "text") return;
-              partTexts.set(partID, (partTexts.get(partID) ?? "") + delta);
+              if (!partID || !delta) return;
+              if (field !== "text" && field !== "thinking") return;
+              ingestDelta(partID, delta, field);
               renderStreaming();
             } else if (ev.type === "message.part.updated") {
-              // Authoritative replacement when we missed earlier deltas.
+              // Authoritative replacement when we missed earlier deltas
+              // (or when the model bundles a block without per-token deltas,
+              // which is what Haiku does for thinking today).
               const part = props.part as
                 | { id?: string; type?: string; text?: string }
                 | undefined;
               if (
                 part?.id &&
-                part.type === "text" &&
+                (part.type === "text" || part.type === "thinking") &&
                 typeof part.text === "string"
               ) {
-                partTexts.set(part.id, part.text);
+                partsState.set(part.id, {
+                  id: part.id,
+                  type: part.type,
+                  text: part.text,
+                });
                 renderStreaming();
               }
             }
@@ -751,7 +780,7 @@ function AssistantBlock({ msg }: { msg: LocalMessage }) {
   // still render correctly.
   const visibleParts = parts.filter((p) => {
     const t = typeof p?.type === "string" ? p.type : "";
-    return t === "text" || t === "reasoning" || t === "tool";
+    return t === "text" || t === "reasoning" || t === "thinking" || t === "tool";
   });
 
   return (
@@ -810,6 +839,11 @@ function PartBlock({ part }: { part: HarnessMessagePart }) {
       </div>
     );
   }
+  if (t === "thinking") {
+    const text = typeof part.text === "string" ? part.text : "";
+    if (!text) return null;
+    return <ThinkingBlock text={text} />;
+  }
   if (t === "reasoning") {
     const text = typeof part.text === "string" ? part.text : "";
     if (!text) return null;
@@ -819,6 +853,38 @@ function PartBlock({ part }: { part: HarnessMessagePart }) {
     return <ToolBlock part={part} />;
   }
   return null;
+}
+
+function ThinkingBlock({ text }: { text: string }) {
+  // Claude.ai-style: a small "Thinking" pill collapsed by default; clicking
+  // reveals the full reasoning in a subdued gray box. Default-collapsed so
+  // it doesn't compete visually with the actual response.
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-gray-200 bg-gray-50/60 text-[13px] text-gray-600">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-gray-100"
+      >
+        <ChevronDown
+          className={`w-3 h-3 shrink-0 transition-transform ${
+            open ? "" : "-rotate-90"
+          }`}
+        />
+        <span className="font-medium">Thinking</span>
+        <span className="text-gray-400">·</span>
+        <span className="text-gray-400 text-[11px]">
+          {open ? "click to collapse" : "click to expand"}
+        </span>
+      </button>
+      {open ? (
+        <div className="border-t border-gray-200 px-3 py-2 italic leading-relaxed whitespace-pre-wrap text-gray-500">
+          {text}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ReasoningBlock({ text }: { text: string }) {
