@@ -201,11 +201,6 @@ function PoolBar({ warm, provisioning, target }: PoolBarProps) {
   );
 }
 
-function maskArn(arn: string): string {
-  if (arn.length < 24) return arn;
-  return `${arn.slice(0, 16)}…${arn.slice(-12)}`;
-}
-
 export default function SettingsPage() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -424,12 +419,15 @@ export default function SettingsPage() {
                   Runtime
                 </h3>
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                  <KV label="Region" value={stats.runtime.aws_region} />
-                  <KV label="Cluster" value={stats.runtime.aws_cluster} />
+                  <KV label="Namespace" value={stats.runtime.namespace} />
                   <KV
-                    label="Task definition"
-                    value={maskArn(stats.runtime.task_definition_arn)}
+                    label="Harness image"
+                    value={stats.runtime.harness_image}
                     mono
+                  />
+                  <KV
+                    label="NodePort range"
+                    value={stats.runtime.nodeport_range}
                   />
                   <KV
                     label="Container port"

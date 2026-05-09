@@ -7,7 +7,7 @@
  * on a request landing on a particular Next instance.
  *
  * Both ticks share the same loop:
- *   - reconcileOrphans: stops Fargate tasks whose DB row is gone / terminal.
+ *   - reconcileOrphans: deletes Sandbox CRs whose DB row is gone / terminal.
  *   - topUpWarmPool:    drives the warm pool toward `WARM_POOL_SIZE`.
  *
  * Reconcile is always on; warm-pool top-up is a no-op when

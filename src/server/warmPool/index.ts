@@ -1,5 +1,5 @@
 /**
- * Warm pool — pre-provisioned Fargate tasks waiting to be claimed by a
+ * Warm pool — pre-provisioned sandbox pods waiting to be claimed by a
  * session create.
  *
  * See ./README.md for the full architecture write-up (lifecycle diagram,
@@ -7,10 +7,11 @@
  *
  * Quick summary
  * -------------
- * `POST /agents/{id}/session` today launches a fresh Fargate task in the
- * request: ECS schedule + ECR pull + container boot dominate (~40s avg).
- * The warm pool runs that work in the background ahead of time — a
- * request that lands while a warm task is available finishes in ~5s.
+ * `POST /agents/{id}/session` today creates a fresh Sandbox CR in the
+ * request: pod schedule + image pull + opencode boot dominate (~10s avg
+ * on cached images, longer on first pull). The warm pool runs that work
+ * in the background ahead of time — a request that lands while a warm
+ * pod is available finishes in ~1.8s.
  *
  * Per-agent: the opencode harness reads `REPO_URL`, `BRANCH`, and
  * `AGENT_PROMPT` from container env at boot, so a warm task launched for
@@ -27,7 +28,7 @@ import {
   stopTask,
   waitHttpReady,
   waitRunningGetUrl,
-} from "@/server/sandbox";
+} from "@/server/k8s";
 import type { AgentRow, WarmTaskRow } from "@/server/types";
 
 // Per-agent target. Today we always keep 1 warm task per recently-active

@@ -13,7 +13,7 @@ import { ZodError } from "zod";
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { stopTask } from "@/server/sandbox";
+import { stopTask } from "@/server/k8s";
 import { invalidateSession } from "@/server/sessionCache";
 import { HttpError, httpError, toApiSession } from "@/server/types";
 

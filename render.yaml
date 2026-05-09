@@ -1,0 +1,146 @@
+# Render Blueprint. Powers the "Deploy to Render" button in
+# deploy/render/README.md.
+#
+# What this provisions:
+#   - litellm-proxy   web service, model gateway
+#   - web             web service, this repo
+#   - worker          background worker, this repo
+#   - postgres        managed Postgres
+#
+# Sandbox cluster is OUT OF SCOPE — Render does not host k8s. Bring your
+# own EKS / GKE / DigitalOcean Kubernetes / on-prem and paste the
+# kubeconfig as KUBE_CONFIG_B64 on first deploy. See deploy/render/README.md.
+
+databases:
+  - name: litellm-agents-postgres
+    plan: starter
+    postgresMajorVersion: 16
+
+services:
+  - type: web
+    name: litellm-proxy
+    runtime: image
+    image:
+      url: ghcr.io/berriai/litellm:main-stable
+    plan: starter           # paid: free tier sleeps and breaks first-call latency
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LITELLM_MASTER_KEY
+        generateValue: true
+
+  - type: web
+    name: litellm-agents-web
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npx prisma generate && npm run build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: |
+      set -e
+      if [ -n "$KUBE_CONFIG_B64" ]; then
+        echo "$KUBE_CONFIG_B64" | base64 -d > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      fi
+      npm start
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: litellm-agents-postgres
+          property: connectionString
+      - key: MASTER_KEY
+        generateValue: true
+      - key: UI_USERNAME
+        value: admin
+      - key: LITELLM_API_BASE
+        fromService:
+          type: web
+          name: litellm-proxy
+          property: hostport
+      - key: LITELLM_API_KEY
+        fromService:
+          type: web
+          name: litellm-proxy
+          envVarKey: LITELLM_MASTER_KEY
+      - key: LITELLM_DEFAULT_MODEL
+        value: anthropic/claude-sonnet-4-6
+      - key: PREINSTALLED_GITHUB_REPO
+        value: https://github.com/BerriAI/litellm
+      - key: KUBE_CONFIG_B64
+        sync: false                       # paste manually
+      - key: K8S_NAMESPACE
+        value: default
+      - key: K8S_NODE_HOST
+        sync: false                       # node IP / LB hostname for your cluster
+      - key: K8S_NODEPORT_MIN
+        value: "30000"
+      - key: K8S_NODEPORT_MAX
+        value: "30099"
+      - key: K8S_IMAGE_PULL_POLICY
+        value: IfNotPresent
+      - key: K8S_HARNESS_IMAGE
+        sync: false                       # registry path of opencode-sandbox
+      - key: WARM_POOL_SIZE
+        value: "2"
+
+  - type: worker
+    name: litellm-agents-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npx prisma generate
+    startCommand: |
+      set -e
+      if [ -n "$KUBE_CONFIG_B64" ]; then
+        echo "$KUBE_CONFIG_B64" | base64 -d > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      fi
+      npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: litellm-agents-postgres
+          property: connectionString
+      - key: MASTER_KEY
+        fromService:
+          type: web
+          name: litellm-agents-web
+          envVarKey: MASTER_KEY
+      - key: UI_USERNAME
+        value: admin
+      - key: LITELLM_API_BASE
+        fromService:
+          type: web
+          name: litellm-proxy
+          property: hostport
+      - key: LITELLM_API_KEY
+        fromService:
+          type: web
+          name: litellm-proxy
+          envVarKey: LITELLM_MASTER_KEY
+      - key: LITELLM_DEFAULT_MODEL
+        value: anthropic/claude-sonnet-4-6
+      - key: PREINSTALLED_GITHUB_REPO
+        value: https://github.com/BerriAI/litellm
+      - key: KUBE_CONFIG_B64
+        sync: false
+      - key: K8S_NAMESPACE
+        value: default
+      - key: K8S_NODE_HOST
+        sync: false
+      - key: K8S_NODEPORT_MIN
+        value: "30000"
+      - key: K8S_NODEPORT_MAX
+        value: "30099"
+      - key: K8S_IMAGE_PULL_POLICY
+        value: IfNotPresent
+      - key: K8S_HARNESS_IMAGE
+        sync: false
+      - key: WARM_POOL_SIZE
+        value: "2"

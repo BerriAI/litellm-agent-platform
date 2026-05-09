@@ -55,10 +55,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       # Read-only mount of the host kubeconfig so @kubernetes/client-node can
-      # find a cluster when SANDBOX_BACKEND=k8s. For kind clusters created by
-      # bin/kind-up.sh, the kubeconfig server points at host.docker.internal
-      # so this works from inside the compose network. Ignored entirely when
-      # SANDBOX_BACKEND=fargate.
+      # find a cluster. For kind clusters created by bin/kind-up.sh, the
+      # apiserver is pinned at host.docker.internal:6444 so this works from
+      # inside the compose network as long as K8S_API_SERVER overrides the
+      # kubeconfig server URL accordingly.
       - ${HOME}/.kube:/root/.kube:ro
     depends_on:
       db-migrate:

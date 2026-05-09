@@ -35,7 +35,7 @@ import {
   stopTask,
   waitHttpReady,
   waitRunningGetUrl,
-} from "@/server/sandbox";
+} from "@/server/k8s";
 import { invalidateSession, putCachedSession } from "@/server/sessionCache";
 import {
   expandMessage,

@@ -1,12 +1,9 @@
 # LiteLLM Agent Platform
 
-A simple, self-hosted infrastructure platform for running multiple agents in production.
+Self-hosted infrastructure for running multiple agents in production. Manages:
 
-The main benefit of using this is that it will manage:
-- Different sandboxes for different teams/contexts
-- Session management across pod restarts/upgrades
-
-We built this because we wanted a managed agent solution, but fully self-hosted. We are excited to have it open sourced and available for everyone to use.
+- Per-team / per-context sandboxes
+- Session continuity across pod restarts and upgrades
 
 <img width="1997" height="1219" alt="Xnapper-2026-05-08-19 10 50" src="https://github.com/user-attachments/assets/c0c2c2f8-d9e2-4821-b73a-e3971dac5169" />
 
@@ -14,20 +11,30 @@ We built this because we wanted a managed agent solution, but fully self-hosted.
 
 ## Quickstart
 
+Sandboxes run on Kubernetes via the [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) CRD. Local dev uses [kind](https://kind.sigs.k8s.io/).
+
+Prereqs: Docker Desktop, `kind`, `kubectl`, `helm`, a LiteLLM gateway.
+
 ```bash
-./setup.sh
+bin/kind-up.sh
 docker compose up
 ```
 
-Needs Docker Desktop, working AWS credentials (env vars, `AWS_PROFILE` + `~/.aws/credentials`, SSO, instance role — anything the AWS SDK's default chain finds), and a LiteLLM gateway. `./setup.sh` prompts for any missing config, validates `aws sts get-caller-identity` works, then provisions AWS infra (ECR, IAM, SG, cluster, task def) and writes the outputs into `.env`. `docker compose up` boots Postgres, runs the schema migration as an init container, and starts web (`:3000`) + worker.
+`bin/kind-up.sh` is idempotent — provisions a kind cluster `agent-sbx`, installs the agent-sandbox controller, and loads the harness image. `docker compose up` boots Postgres, runs the schema migration, and starts web (`:3000`) + worker.
+
+Architecture and tuning: [docs/k8s-backend.md](docs/k8s-backend.md).
 
 ### Container env passthrough
 
-Anything in `.env` prefixed `CONTAINER_ENV_` is injected into every Fargate container with the prefix stripped:
+Anything in `.env` prefixed `CONTAINER_ENV_` is injected into every sandbox container with the prefix stripped:
 
 ```bash
 CONTAINER_ENV_GITHUB_TOKEN=ghp_...   # container sees GITHUB_TOKEN=ghp_...
 ```
+
+### Deploying
+
+Per-platform guides in [`deploy/`](deploy/).
 
 ## Architecture
 
@@ -35,7 +42,7 @@ CONTAINER_ENV_GITHUB_TOKEN=ghp_...   # container sees GITHUB_TOKEN=ghp_...
 
 ## Developer Usage
 
-Hitting the API directly with curl — create an agent, open a session, send a message, read the reply. See [`src/server/DEVELOPER.md`](src/server/DEVELOPER.md) for the full walkthrough.
+Hitting the API directly with curl — create an agent, open a session, send a message, read the reply. See [`src/server/DEVELOPER.md`](src/server/DEVELOPER.md).
 
 ## License
 

@@ -26,7 +26,7 @@ import {
   runTask,
   waitHttpReady,
   waitRunningGetUrl,
-} from "@/server/sandbox";
+} from "@/server/k8s";
 import { putCachedSession } from "@/server/sessionCache";
 import {
   expandMessage,

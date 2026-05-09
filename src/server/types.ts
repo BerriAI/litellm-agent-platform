@@ -78,8 +78,8 @@ export const CreateSessionBody = z.object({
   initial_prompt: z.string().optional(),
   title: z.string().optional(),
   /**
-   * Per-session env vars forwarded into the harness shell at Fargate task
-   * launch time. Use for short-lived secrets like `GITHUB_TOKEN` or
+   * Per-session env vars forwarded into the harness shell at Sandbox CR
+   * create time. Use for short-lived secrets like `GITHUB_TOKEN` or
    * `CIRCLECI_TOKEN`. Never persisted to the database, never logged by value.
    *
    * Constraints (each is a 400 if violated):
@@ -190,9 +190,9 @@ export interface ApiAdminStats {
     total: number;
   };
   runtime: {
-    aws_region: string;
-    aws_cluster: string;
-    task_definition_arn: string;
+    namespace: string;
+    harness_image: string;
+    nodeport_range: string; // "min-max"
     container_port: number;
     reconcile_interval_seconds: number;
   };
@@ -237,25 +237,10 @@ export interface HarnessMessage {
 // ============================================================================
 
 // ---- src/server/env.ts ----
-export type SandboxBackend = "fargate" | "k8s";
-
 export interface ServerEnv {
   DATABASE_URL: string;
   UI_USERNAME: string;
   MASTER_KEY: string;
-  // Selects sandbox runtime. `fargate` keeps the AWS path; `k8s` runs against
-  // a Kubernetes cluster via the agent-sandbox CRD. AWS_* fields below are
-  // ignored when backend=k8s.
-  SANDBOX_BACKEND: SandboxBackend;
-  AWS_REGION: string;
-  AWS_CLUSTER: string;
-  AWS_ACCESS_KEY_ID?: string;
-  AWS_SECRET_ACCESS_KEY?: string;
-  AWS_PROFILE?: string;
-  AWS_TASK_DEFINITION_ARN: string;
-  AWS_SUBNETS: string[]; // parsed from comma-separated env
-  AWS_SECURITY_GROUP: string;
-  // Kubernetes backend config — used only when SANDBOX_BACKEND=k8s.
   K8S_NAMESPACE: string; // default "default"
   // Hostname the web container reaches the kind/k8s node on. For local dev
   // with kind + docker-compose this is "host.docker.internal" (mapped via
@@ -294,8 +279,8 @@ export interface ServerEnv {
 
   /**
    * All process.env entries whose key starts with `CONTAINER_ENV_`, with
-   * the prefix stripped. Passed verbatim into every Fargate container's
-   * `environment[]` overrides at RunTask time.
+   * the prefix stripped. Passed verbatim into every sandbox container's
+   * `env[]` at Sandbox CR create time.
    */
   containerEnvPassthrough: Record<string, string>;
 }
@@ -340,11 +325,11 @@ export interface HarnessSendMessageOpts {
 //   export async function harnessCreateSession(opts: HarnessCreateSessionOpts): Promise<string> // returns harness_session_id
 //   export async function harnessSendMessage(opts: HarnessSendMessageOpts): Promise<HarnessMessageResponse>
 
-// ---- src/server/fargate.ts ----
+// ---- src/server/k8s.ts ----
 //
 // Exactly one of `session_id` or `warm_task_id` must be set. Both end up as
-// ECS tags on the launched task so the reconciler can attribute it back to
-// the right DB row when sweeping.
+// labels on the Sandbox CR so the reconciler can attribute it back to the
+// right DB row when sweeping.
 export interface RunTaskOpts {
   agent: AgentRow;
   session_id?: string;
@@ -358,16 +343,16 @@ export interface RunTaskOpts {
   env_vars?: Record<string, string>;
 }
 
+// `task_arn` here is the Sandbox CR name — kept as `task_arn` for symmetry
+// with prior naming and the unified reconciler shape.
 export interface TaggedTask {
   task_arn: string;
   session_id: string | null;
   agent_id: string | null;
   warm_task_id: string | null;
-  last_status: string; // RUNNING | STOPPED | PROVISIONING | etc
-  // ECS sets `startedAt` only when the task transitions to RUNNING. PENDING /
-  // PROVISIONING tasks have a non-null `createdAt` but null `startedAt`. The
-  // grace-window check needs a non-null age for new tasks regardless of
-  // status, so reconcile falls back to created_at when started_at is null.
+  last_status: string; // RUNNING | PENDING | STOPPED | UNKNOWN
+  // Sandbox CRs only carry `creationTimestamp`; we project it onto both
+  // fields so the reconciler's grace-window math is single-sourced.
   created_at: Date | null;
   started_at: Date | null;
 }
@@ -375,7 +360,7 @@ export interface TaggedTask {
 // must export (every function async):
 //   export async function runTask(opts: RunTaskOpts): Promise<{ task_arn: string }>
 //   export async function stopTask(task_arn: string, reason?: string): Promise<void>
-//   export async function waitRunningGetIp(task_arn: string, timeout_ms?: number): Promise<string>  // public IP
+//   export async function waitRunningGetUrl(task_arn: string, agent: AgentRow, timeout_ms?: number): Promise<string>
 //   export async function waitHttpReady(sandbox_url: string, timeout_ms?: number): Promise<void>
 //   export async function listTaggedTasks(): Promise<TaggedTask[]>
 
@@ -385,13 +370,13 @@ export interface ReconcileResult {
   stopped: number;
   failed_creating: number;
   idle_killed: number;
-  // Warm-pool sweeps. Counts ECS tasks tagged as warm whose DB row is gone
+  // Warm-pool sweeps. Counts warm-labelled Sandbox CRs whose DB row is gone
   // or terminal — non-zero usually means an operator or migration deleted
   // a warm row out from under the worker.
   warm_orphans_stopped: number;
-  // Ready Sessions whose backing ECS task vanished (stopped externally —
-  // OOM, eviction, manual stop). Flipped to `dead` so send_message stops
-  // hammering a dead public IP.
+  // Ready Sessions whose backing Sandbox CR vanished (deleted externally —
+  // OOM, eviction, manual delete). Flipped to `dead` so send_message stops
+  // hammering a dead URL.
   ghost_killed: number;
 }
 
@@ -467,6 +452,6 @@ export const TAG_WARM_TASK_ID = "litellm_warm_task_id";
 export const HARNESS_OPENCODE = "opencode";
 export const SESSION_CREATING_TIMEOUT_MS = 600_000;
 // Ready sessions with no message activity (last_seen_at) older than this are
-// reaped by the reconciler — keeps Fargate cost bounded for forgotten tabs.
+// reaped by the reconciler — keeps cluster footprint bounded for forgotten tabs.
 export const SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const RECONCILE_NEW_TASK_GRACE_MS = 300_000;

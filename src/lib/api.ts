@@ -669,9 +669,9 @@ export interface AdminStats {
   };
   agents: { total: number };
   runtime: {
-    aws_region: string;
-    aws_cluster: string;
-    task_definition_arn: string;
+    namespace: string;
+    harness_image: string;
+    nodeport_range: string;
     container_port: number;
     reconcile_interval_seconds: number;
   };

@@ -5,7 +5,7 @@
  *   - Warm pool: configured limits + current depth, broken out per agent.
  *   - Sessions: live counts + per-agent breakdown of creating/ready.
  *   - Agents: total count.
- *   - Runtime: ECS cluster, task def ARN, port, reconcile cadence.
+ *   - Runtime: namespace, harness image, NodePort range, reconcile cadence.
  *
  * Read-only and aggressively batched — three groupBy queries plus an agent
  * lookup, then an O(rows) merge. Tested at small scale; if pool counts ever
@@ -164,9 +164,9 @@ export const GET = wrap(async (req: Request) => {
     },
     agents: { total: agentTotal },
     runtime: {
-      aws_region: env.AWS_REGION,
-      aws_cluster: env.AWS_CLUSTER,
-      task_definition_arn: env.AWS_TASK_DEFINITION_ARN,
+      namespace: env.K8S_NAMESPACE,
+      harness_image: env.K8S_HARNESS_IMAGE,
+      nodeport_range: `${env.K8S_NODEPORT_MIN}-${env.K8S_NODEPORT_MAX}`,
       container_port: env.CONTAINER_PORT,
       reconcile_interval_seconds: env.RECONCILE_INTERVAL_SECONDS,
     },

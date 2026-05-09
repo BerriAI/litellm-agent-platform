@@ -1,5 +1,5 @@
 /**
- * Orphan reconciler — periodic sweep that keeps Fargate task state and DB
+ * Orphan reconciler — periodic sweep that keeps Sandbox CR state and DB
  * session rows in agreement. Ported from
  * litellm/proxy/managed_agents_endpoints/lifecycle.py.
  *
@@ -20,7 +20,7 @@
  */
 
 import { prisma } from "@/server/db";
-import { listTaggedTasks, stopTask } from "@/server/sandbox";
+import { listTaggedTasks, stopTask } from "@/server/k8s";
 import {
   RECONCILE_NEW_TASK_GRACE_MS,
   SESSION_CREATING_TIMEOUT_MS,

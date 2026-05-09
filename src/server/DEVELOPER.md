@@ -26,7 +26,7 @@ Returns the new agent. Save `id` as `AGENT_ID`.
 
 ## 2. Create a session
 
-Boots a Fargate task and the harness inside it. Cold start ~50–120s.
+Boots a sandbox pod and the harness inside it. Cold start ~10s on k8s; sub-2s when a warm pool slot is available.
 
 ```bash
 curl -s $BASE/api/v1/managed_agents/agents/$AGENT_ID/session \
@@ -59,7 +59,7 @@ curl -s $BASE/api/v1/managed_agents/agents/$AGENT_ID/session \
   }'
 ```
 
-`env_vars` is `Record<string, string>`. Values are passed verbatim into the Fargate container's `environment[]` overrides at `RunTask` time. They are **never persisted** to the database and **never logged** by value — keep this contract intact in any future logging you add.
+`env_vars` is `Record<string, string>`. Values are passed verbatim into the sandbox pod's container env at Sandbox-CR-create time. They are **never persisted** to the database and **never logged** by value — keep this contract intact in any future logging you add.
 
 Constraints (each is a 400 from zod):
 
@@ -98,4 +98,4 @@ curl -X DELETE -s $BASE/api/v1/managed_agents/sessions/$SESSION_ID \
   -H "authorization: Bearer $KEY"
 ```
 
-Stops the Fargate task and marks the session `dead`. Idempotent.
+Deletes the Sandbox CR and marks the session `dead`. Idempotent.
