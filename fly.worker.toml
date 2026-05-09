@@ -1,0 +1,27 @@
+# Fly.io app config for the reconciler worker. No public ports.
+
+app = "litellm-agents-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  build_target = "worker"
+
+[env]
+  NODE_ENV = "production"
+  K8S_NAMESPACE = "default"
+  K8S_NODEPORT_MIN = "30000"
+  K8S_NODEPORT_MAX = "30099"
+  K8S_IMAGE_PULL_POLICY = "IfNotPresent"
+  WARM_POOL_SIZE = "2"
+  RECONCILE_INTERVAL_SECONDS = "60"
+  PREINSTALLED_GITHUB_REPO = "https://github.com/BerriAI/litellm"
+  LITELLM_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
+  # k8s.ts reads KUBE_CONFIG_B64 directly — no kubeconfig on disk needed.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# Secrets — same shape as the web app. Worker doesn't need MASTER_KEY but
+# the env loader requires it; set the same value as web.

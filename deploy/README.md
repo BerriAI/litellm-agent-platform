@@ -9,12 +9,13 @@ internals.
 
 ## Targets
 
-| Target  | web/worker host        | Sandbox cluster                  | Guide |
-|---------|------------------------|----------------------------------|-------|
-| Render  | Render Web + Worker    | external EKS or GKE              | [`render/`](render/) |
-| Railway | Railway services       | external EKS or GKE              | [`railway/`](railway/) |
-| AWS     | ECS Fargate or App Runner | EKS Auto Mode (same account)  | [`aws/`](aws/) |
-| GCP     | Cloud Run              | GKE Autopilot (same project)     | [`gcp/`](gcp/) |
+| Target  | web/worker host        | Sandbox cluster                          | Guide |
+|---------|------------------------|------------------------------------------|-------|
+| Fly.io  | Fly Machines           | k3s on a Fly machine (~60s)              | [`fly/`](fly/) |
+| Render  | Render Web + Worker    | external — k3s on Fly, EKS, or GKE       | [`render/`](render/) |
+| Railway | Railway services       | external EKS or GKE                      | [`railway/`](railway/) |
+| AWS     | ECS Fargate or App Runner | EKS Auto Mode (same account)          | [`aws/`](aws/) |
+| GCP     | Cloud Run              | GKE Autopilot (same project)             | [`gcp/`](gcp/) |
 
 Component matrix is identical on every target:
 

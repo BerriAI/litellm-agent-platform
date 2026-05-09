@@ -1,0 +1,46 @@
+# Fly.io app config for the web service.
+# Worker has its own config at fly.worker.toml.
+# Deploy with bin/fly-deploy.sh, which orchestrates both.
+
+app = "litellm-agents-web"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  build_target = "runner"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  HOSTNAME = "0.0.0.0"
+  NEXT_TELEMETRY_DISABLED = "1"
+  K8S_NAMESPACE = "default"
+  K8S_NODEPORT_MIN = "30000"
+  K8S_NODEPORT_MAX = "30099"
+  K8S_IMAGE_PULL_POLICY = "IfNotPresent"
+  WARM_POOL_SIZE = "2"
+  PREINSTALLED_GITHUB_REPO = "https://github.com/BerriAI/litellm"
+  LITELLM_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
+  # k8s.ts reads KUBE_CONFIG_B64 directly — no kubeconfig on disk needed.
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"   # session cache lives in-memory; cold starts wipe it
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# Secrets to set with `flyctl secrets set` (also documented in
+# deploy/fly/README.md):
+#   MASTER_KEY=             auto-gen during deploy
+#   UI_USERNAME=admin
+#   DATABASE_URL=           wired by `flyctl postgres attach`
+#   LITELLM_API_BASE=       your existing LiteLLM endpoint
+#   LITELLM_API_KEY=
+#   KUBE_CONFIG_B64=        from bin/k3s-up.sh
+#   K8S_NODE_HOST=          from bin/k3s-up.sh
+#   K8S_HARNESS_IMAGE=      registry path of opencode-sandbox

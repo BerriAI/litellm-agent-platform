@@ -80,7 +80,17 @@ let _custom: k8s.CustomObjectsApi | null = null;
 
 function loadKubeConfig(): k8s.KubeConfig {
   const kc = new k8s.KubeConfig();
-  if (process.env.KUBECONFIG) {
+  // Hosted PaaS (Render, Fly, Railway, …) usually doesn't have a
+  // kubeconfig on disk. Accept a base64-encoded blob in env so the
+  // platform image stays generic and the deploy artifact carries the
+  // cluster credentials. Falls back to KUBECONFIG file or the default
+  // kubeconfig discovery chain when unset.
+  if (process.env.KUBE_CONFIG_B64) {
+    const yaml = Buffer.from(process.env.KUBE_CONFIG_B64, "base64").toString(
+      "utf8",
+    );
+    kc.loadFromString(yaml);
+  } else if (process.env.KUBECONFIG) {
     kc.loadFromFile(process.env.KUBECONFIG);
   } else {
     kc.loadFromDefault();
