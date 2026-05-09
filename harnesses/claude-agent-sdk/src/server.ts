@@ -119,6 +119,10 @@ function emit(s: Session, type: string, props: Record<string, unknown>): void {
 // ---------------------------------------------------------------------------
 
 interface PlatformPart {
+  // Stable per-part id. The platform UI keys deltas off this — without it,
+  // a `message.part.delta` arriving from us has no way to splice into the
+  // right bubble. Format: `${assistantMsgId}_b${blockIndex}`.
+  id?: string;
   type: string;
   [k: string]: unknown;
 }
@@ -175,6 +179,12 @@ async function runTurn(
     systemPrompt: SYSTEM_PROMPT || undefined,
     permissionMode: "bypassPermissions",
     abortController: ac,
+    // Token-level streaming. Without this, the SDK only emits one `assistant`
+    // event when the whole turn finishes — so the UI sees one big chunk
+    // instead of progressive text. With it on, the SDK emits `stream_event`
+    // frames carrying Anthropic-API content_block_delta deltas; we splice
+    // those into a growing `message.part.updated` below.
+    includePartialMessages: true,
     ...(CLAUDE_BIN ? { pathToClaudeCodeExecutable: CLAUDE_BIN } : {}),
     // Resume the SDK's persisted session if we have one — that's how the
     // SDK stitches turn N+1 onto turn N's history without us tracking it.
@@ -257,13 +267,22 @@ function handleSdkEvent(
     emit(s, "session.connected", {});
   } else if (ev.type === "assistant" && ev.message) {
     const content = ev.message.content ?? [];
-    for (const block of content) {
+    content.forEach((block: { type: string; text?: string; name?: string; id?: string; input?: unknown }, idx: number) => {
+      // Stable per-block id so the UI can pair this authoritative update with
+      // any deltas it received earlier under the same partID. Format mirrors
+      // the stream_event branch below.
+      const partId = `${msgId}_b${idx}`;
       if (block.type === "text") {
-        const part: PlatformPart = { type: "text", text: block.text ?? "" };
+        const part: PlatformPart = {
+          id: partId,
+          type: "text",
+          text: block.text ?? "",
+        };
         parts.push(part);
         emit(s, "message.part.updated", { messageID: msgId, part });
       } else if (block.type === "tool_use") {
         const part: PlatformPart = {
+          id: partId,
           type: "tool",
           tool: block.name,
           callID: block.id,
@@ -272,7 +291,7 @@ function handleSdkEvent(
         parts.push(part);
         emit(s, "message.part.updated", { messageID: msgId, part });
       }
-    }
+    });
   } else if (ev.type === "user" && ev.message) {
     // Tool results come back as `user` messages with `tool_result` blocks;
     // attach the output to the matching tool part so the UI can show it.
@@ -320,10 +339,25 @@ function handleSdkEvent(
       });
     }
   } else if (ev.type === "stream_event") {
-    // Token-level deltas — not all event types matter, but the SDK emits
-    // these when includePartialMessages is on. Forward to the bus so the UI
-    // can render character-level updates.
-    emit(s, "message.part.delta", { messageID: msgId, raw: ev });
+    // Token-level deltas. With includePartialMessages: true, the SDK forwards
+    // raw Anthropic-API SSE frames; the only one the UI cares about is
+    // content_block_delta / text_delta. Map block-index → stable partID so
+    // the UI can splice each delta onto the right bubble. The renderer at
+    // src/app/sessions/[sid]/view.tsx:396 expects { partID, delta, field }.
+    const inner = ev.event;
+    if (
+      inner?.type === "content_block_delta" &&
+      typeof inner.index === "number" &&
+      inner.delta?.type === "text_delta" &&
+      typeof inner.delta.text === "string"
+    ) {
+      emit(s, "message.part.delta", {
+        messageID: msgId,
+        partID: `${msgId}_b${inner.index}`,
+        delta: inner.delta.text,
+        field: "text",
+      });
+    }
   }
 }
 
