@@ -260,14 +260,29 @@ export default function SessionThreadView() {
     };
   }, [sessionId]);
 
-  // Auto-scroll only when user is already near the bottom.
+  // First load on a session URL: jump straight to the latest turn so the
+  // user lands at the live end of the conversation (matches Slack, iMessage,
+  // every chat UI). After that, fall back to "auto-scroll only if the user
+  // is already near the bottom" so we don't yank them off content they're
+  // reading higher up in the thread.
   const lastMessageCountRef = useRef<number>(0);
+  const didInitialScrollRef = useRef<boolean>(false);
   useEffect(() => {
     const c = scrollContainerRef.current;
     if (!c) return;
     const newCount = messages.length;
     const grew = newCount > lastMessageCountRef.current;
     lastMessageCountRef.current = newCount;
+
+    if (!didInitialScrollRef.current && newCount > 0) {
+      didInitialScrollRef.current = true;
+      messagesEndRef.current?.scrollIntoView({
+        behavior: "auto",
+        block: "end",
+      });
+      return;
+    }
+
     const distanceFromBottom = c.scrollHeight - c.scrollTop - c.clientHeight;
     const nearBottom = distanceFromBottom < NEAR_BOTTOM_PX;
     if (grew && nearBottom) {
