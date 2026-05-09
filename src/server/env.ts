@@ -27,6 +27,10 @@ const EnvSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
   AWS_PROFILE: z.string().optional(),
   AWS_TASK_DEFINITION_ARN: z.string().min(1),
+  // Per-harness overrides. Optional — when unset, both harnesses use
+  // AWS_TASK_DEFINITION_ARN (single-harness fallback for existing deploys).
+  AWS_TASK_DEFINITION_ARN_OPENCODE: z.string().optional(),
+  AWS_TASK_DEFINITION_ARN_CLAUDE_SDK: z.string().optional(),
   AWS_SUBNETS: z
     .string()
     .min(1)
