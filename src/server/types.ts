@@ -12,7 +12,7 @@
  * with what the existing UI sends.
  */
 
-import type { Agent, Session } from "@prisma/client";
+import type { Agent, Session, WarmTask } from "@prisma/client";
 import { z } from "zod";
 
 // ============================================================================
@@ -21,8 +21,10 @@ import { z } from "zod";
 
 export type AgentRow = Agent;
 export type SessionRow = Session;
+export type WarmTaskRow = WarmTask;
 
 export type SessionStatus = "creating" | "ready" | "failed" | "dead";
+export type WarmTaskStatus = "provisioning" | "warm" | "claimed" | "dead";
 
 // ============================================================================
 // API request schemas (zod) — handlers parse with these
@@ -201,6 +203,15 @@ export interface ServerEnv {
   LITELLM_API_KEY: string;
   CONTAINER_PORT: number; // default 4096
   RECONCILE_INTERVAL_SECONDS: number; // default 60
+
+  // Warm pool. WARM_POOL_SIZE = 0 disables the feature entirely; default of
+  // 2 keeps two tasks ready for the most-recently-active agent so users
+  // get sub-5s session creates out of the box.
+  WARM_POOL_SIZE: number;
+  WARM_POOL_MAX_PROVISIONING: number; // default 2
+  WARM_POOL_TTL_MINUTES: number; // default 30
+  WARM_POOL_RECENT_AGENT_HOURS: number; // default 24
+
   /**
    * All process.env entries whose key starts with `CONTAINER_ENV_`, with
    * the prefix stripped. Passed verbatim into every Fargate container's
@@ -250,9 +261,14 @@ export interface HarnessSendMessageOpts {
 //   export async function harnessSendMessage(opts: HarnessSendMessageOpts): Promise<HarnessMessageResponse>
 
 // ---- src/server/fargate.ts ----
+//
+// Exactly one of `session_id` or `warm_task_id` must be set. Both end up as
+// ECS tags on the launched task so the reconciler can attribute it back to
+// the right DB row when sweeping.
 export interface RunTaskOpts {
   agent: AgentRow;
-  session_id: string;
+  session_id?: string;
+  warm_task_id?: string;
   /**
    * Per-session env vars to forward into the harness container alongside the
    * required `base` keys and the global `containerEnvPassthrough`. Required
@@ -266,6 +282,7 @@ export interface TaggedTask {
   task_arn: string;
   session_id: string | null;
   agent_id: string | null;
+  warm_task_id: string | null;
   last_status: string; // RUNNING | STOPPED | PROVISIONING | etc
   started_at: Date | null;
 }
@@ -283,6 +300,10 @@ export interface ReconcileResult {
   stopped: number;
   failed_creating: number;
   idle_killed: number;
+  // Warm-pool sweeps. Counts ECS tasks tagged as warm whose DB row is gone
+  // or terminal — non-zero usually means an operator or migration deleted
+  // a warm row out from under the worker.
+  warm_orphans_stopped: number;
 }
 
 // must export:
@@ -353,6 +374,7 @@ export function toApiSession(
 
 export const TAG_SESSION_ID = "litellm_session_id";
 export const TAG_AGENT_ID = "litellm_agent_id";
+export const TAG_WARM_TASK_ID = "litellm_warm_task_id";
 export const HARNESS_OPENCODE = "opencode";
 export const SESSION_CREATING_TIMEOUT_MS = 600_000;
 // Ready sessions with no message activity (last_seen_at) older than this are
