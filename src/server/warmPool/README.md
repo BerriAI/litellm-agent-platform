@@ -135,9 +135,10 @@ Cost reference: 512 CPU / 1024 mem Fargate task ≈ **$0.022/hr** ≈ $16/mo per
 |---|---|
 | `provisionWarmTask` fails (RunTask error, ECR pull timeout, opencode never replies) | row marked `dead`; reconciler stops the underlying ECS task on next sweep; next tick provisions a replacement. |
 | Operator deletes a `WarmTask` row out from under the worker | `sweepWarmOrphans` (in `reconcile.ts`) finds the ECS task tagged `litellm_warm_task_id=...` with no DB row and stops it; respects `RECONCILE_NEW_TASK_GRACE_MS` so freshly launched tasks aren't killed before their row commits. |
+| Reconciler ticks after a successful claim (WarmTask row deleted, ECS task still tagged warm) | `sweepWarmOrphans` cross-checks `Session.task_arn` for every warm-tagged task before stopping anything. A live (non-DEAD) Session that owns the ARN means the task was claimed and is serving the request — the reconciler skips it. Without this guard, the post-claim window would kill the user's task on the next tick. |
 | Harness handshake fails after claim | `Session` row marked `failed`, `WarmTask` row marked `dead` (the task is suspect — handing the same one out again would just fail). User retries → next attempt either claims a different warm task or falls through to cold. |
 | Concurrent claims for the same warm row | `SELECT … FOR UPDATE SKIP LOCKED` guarantees only one transaction wins. The loser sees `null` and falls through to the cold path. |
-| `claimed` row is never deleted (process crash between claim and delete) | reconciler treats `claimed` as a terminal state for warm-tagged tasks and stops the ECS task. The half-created Session row will eventually time out via `SESSION_CREATING_TIMEOUT_MS` and be marked `failed`. |
+| `claimed` row is never deleted (process crash between claim and delete) | once the corresponding Session goes DEAD (e.g. via `SESSION_CREATING_TIMEOUT_MS`), the cross-check no longer protects the ARN, and the reconciler treats `claimed` as terminal and stops the ECS task. |
 
 ## Observability
 
