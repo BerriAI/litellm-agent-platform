@@ -24,6 +24,11 @@ const TABS: readonly NavTab[] = [
     label: "Sessions",
     match: (p) => p === "/sessions" || p.startsWith("/sessions/"),
   },
+  {
+    href: "/settings",
+    label: "Settings",
+    match: (p) => p === "/settings" || p.startsWith("/settings/"),
+  },
 ];
 
 const REPO_URL = "https://github.com/BerriAI/litellm-agent-platform";
