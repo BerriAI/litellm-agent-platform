@@ -57,8 +57,13 @@ const LABEL_WARM_TASK_ID = "litellm-warm-task-id";
 // own selector label avoids that coupling.
 const LABEL_SANDBOX_NAME = "litellm-sandbox-name";
 
-const POLL_RUNNING_INTERVAL_MS = 1_000;
-const POLL_HTTP_INTERVAL_MS = 2_000;
+// Poll intervals tuned for local kind: pod IP and NodePort assignment
+// usually settle in <500ms once the controller has scheduled the pod, so
+// shorter ticks bound the tail without flooding the apiserver. Same for
+// the HTTP probe — opencode boots in 5-10s and we don't want a fixed 2s
+// window of dead air after it starts serving.
+const POLL_RUNNING_INTERVAL_MS = 200;
+const POLL_HTTP_INTERVAL_MS = 250;
 const HTTP_PROBE_TIMEOUT_MS = 3_000;
 const DEFAULT_RUNNING_TIMEOUT_MS = 600_000;
 const DEFAULT_HTTP_READY_TIMEOUT_MS = 600_000;
