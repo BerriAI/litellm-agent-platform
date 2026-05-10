@@ -489,6 +489,57 @@ async function readPodPhase(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Node-host discovery
+//
+// The sandbox URL has the shape `http://<host>:<nodePort>`. We can't pin
+// `<host>` to a single node IP forever — when the EKS / GKE nodegroup
+// scales or replaces a node, that IP disappears and every spawn from
+// that point starts dialing a dead address.
+//
+// `K8S_NODE_HOST=auto` (or unset on a hosted cluster) tells us to query
+// the apiserver for any Ready node's external IP at request time. The
+// result is cached for NODE_HOST_TTL_MS so we don't hammer the apiserver
+// — the live set rotates on the order of minutes, not seconds.
+//
+// On kind / docker-compose dev, `K8S_NODE_HOST=host.docker.internal` or
+// `127.0.0.1` keeps the simple path: env-driven, no apiserver hop.
+// ---------------------------------------------------------------------------
+
+const NODE_HOST_TTL_MS = 30_000;
+let _nodeHostCache: { host: string; expiresAt: number } | null = null;
+
+async function discoverNodeHost(): Promise<string> {
+  const now = Date.now();
+  if (_nodeHostCache && _nodeHostCache.expiresAt > now) {
+    return _nodeHostCache.host;
+  }
+  const res = await coreApi().listNode();
+  const list =
+    (res as unknown as { body?: k8s.V1NodeList }).body
+    ?? (res as unknown as k8s.V1NodeList);
+  for (const node of list.items ?? []) {
+    const ready = (node.status?.conditions ?? []).find(
+      (c) => c.type === "Ready",
+    );
+    if (ready?.status !== "True") continue;
+    const addrs = node.status?.addresses ?? [];
+    const ext = addrs.find((a) => a.type === "ExternalIP")?.address
+      ?? addrs.find((a) => a.type === "ExternalDNS")?.address;
+    if (ext) {
+      _nodeHostCache = { host: ext, expiresAt: now + NODE_HOST_TTL_MS };
+      return ext;
+    }
+  }
+  throw new Error("no Ready node with ExternalIP found in cluster");
+}
+
+async function resolveNodeHost(): Promise<string> {
+  const cfg = env.K8S_NODE_HOST;
+  if (!cfg || cfg === "auto") return discoverNodeHost();
+  return cfg;
+}
+
 /**
  * Wait until the Sandbox's pod is Running and resolve to the host-side URL
  * the web container should hit. Mirrors fargate.ts waitRunningGetIp + URL
@@ -513,7 +564,8 @@ export async function waitRunningGetUrl(
       );
     }
     if (phase === "Running" && nodePort !== null) {
-      return `http://${env.K8S_NODE_HOST}:${nodePort}`;
+      const host = await resolveNodeHost();
+      return `http://${host}:${nodePort}`;
     }
     lastReason = `phase=${phase ?? "?"} nodePort=${nodePort ?? "?"}`;
     await sleep(POLL_RUNNING_INTERVAL_MS);
