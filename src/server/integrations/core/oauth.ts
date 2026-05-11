@@ -1,20 +1,22 @@
 /**
  * Generic OAuth flow for the integrations subsystem.
  *
+ * Per-agent model: every OAuth dance is scoped to a specific (agent_id,
+ * integration_id). The agent's `AgentIntegrationConfig` holds the client_id
+ * + client_secret the operator pasted in the UI; this file decrypts them on
+ * the fly and threads them into the provider's adapter calls.
+ *
  * The flow:
- *   1. UI hits `/api/integrations/oauth/{id}/authorize` → `startOAuth(...)` →
- *      302 to the provider's authorize URL with a CSRF `state` we minted.
- *   2. Provider redirects back to `/api/integrations/oauth/{id}/callback` →
- *      `completeOAuth(...)` validates the state, exchanges the code, fetches
+ *   1. UI hits `/api/integrations/oauth/{id}/{agent_id}/authorize` →
+ *      `startOAuth(...)` → 302 to the provider's authorize URL with a CSRF
+ *      `state` we minted that's bound to the (agent_id, integration_id).
+ *   2. Provider redirects back to the matching `/callback` route →
+ *      `completeOAuth(...)` validates state, exchanges the code, fetches
  *      install metadata, upserts an `IntegrationInstall` row with the tokens
  *      encrypted at rest.
  *
- * The state store is an in-process Map with a 10-minute TTL. That works for
- * a single LAP instance; a multi-instance deployment would need a shared
- * store (Redis / Postgres) — flagged in the README under "open issues".
- *
- * The dispatcher uses `getAccessToken(install_id)` to get a usable bearer
- * token, transparently refreshing if it's within 5 minutes of expiry.
+ * The state store is an in-process Map with a 10-minute TTL. Fine for a
+ * single LAP instance; multi-instance needs a shared store.
  */
 
 import { randomBytes } from "node:crypto";
@@ -27,6 +29,7 @@ const REFRESH_BUFFER_MS = 5 * 60_000;
 
 interface StateEntry {
   integrationId: string;
+  agentId: string;
   redirectUri: string;
   expiresAt: number;
 }
@@ -40,23 +43,49 @@ function sweepExpiredStates(now: number): void {
 }
 
 /**
- * Mint a CSRF state, remember which integration + redirect_uri it's for, and
- * return the provider's authorize URL. The caller (the authorize route) does
- * a 302 to that URL.
+ * Resolve the per-agent OAuth config and mint a CSRF state. Returns the
+ * provider's authorize URL. Throws if no config row exists for the agent.
  */
-export function startOAuth(
+export async function startOAuth(
   integration: Integration,
+  agentId: string,
   redirectUri: string,
-): string {
+): Promise<string> {
+  const config = await prisma.agentIntegrationConfig.findUnique({
+    where: {
+      agent_id_integration_id: {
+        agent_id: agentId,
+        integration_id: integration.id,
+      },
+    },
+  });
+  if (!config) {
+    throw new Error(
+      `Agent ${agentId} has no ${integration.id} integration configured. ` +
+        "Save credentials before starting the OAuth flow.",
+    );
+  }
+  if (!config.enabled) {
+    throw new Error(
+      `Agent ${agentId}'s ${integration.id} integration is disabled.`,
+    );
+  }
+
   const state = randomBytes(16).toString("hex");
   const now = Date.now();
   sweepExpiredStates(now);
   stateStore.set(state, {
     integrationId: integration.id,
+    agentId,
     redirectUri,
     expiresAt: now + STATE_TTL_MS,
   });
-  return integration.oauth.authorizeUrl({ state, redirectUri });
+
+  return integration.oauth.authorizeUrl({
+    state,
+    redirectUri,
+    clientId: config.client_id,
+  });
 }
 
 export interface CompleteOAuthInput {
@@ -68,13 +97,14 @@ export interface CompleteOAuthInput {
 
 export interface CompleteOAuthResult {
   install_id: string;
+  agent_id: string;
   workspace_name: string;
 }
 
 /**
  * Validate the OAuth callback: state must match a recent mint for this
- * integration, exchange the code for tokens, fetch metadata, upsert the
- * install row. Throws if state is invalid/expired/cross-integration.
+ * (agent, integration), exchange the code, fetch metadata, upsert the install
+ * row. Throws on state mismatch / expiry / config-missing.
  */
 export async function completeOAuth(
   input: CompleteOAuthInput,
@@ -88,9 +118,22 @@ export async function completeOAuth(
     throw new Error("OAuth state belongs to a different integration");
   }
 
+  const config = await prisma.agentIntegrationConfig.findUnique({
+    where: {
+      agent_id_integration_id: {
+        agent_id: stored.agentId,
+        integration_id: input.integration.id,
+      },
+    },
+  });
+  if (!config) throw new Error("Agent integration config disappeared mid-flow");
+
+  const clientSecret = decryptToken(config.client_secret_enc);
   const token = await input.integration.oauth.exchange({
     code: input.code,
     redirectUri: stored.redirectUri,
+    clientId: config.client_id,
+    clientSecret,
   });
   const meta = await input.integration.oauth.fetchInstallMetadata(
     token.access_token,
@@ -107,7 +150,8 @@ export async function completeOAuth(
 
   const install = await prisma.integrationInstall.upsert({
     where: {
-      integration_id_workspace_id: {
+      agent_id_integration_id_workspace_id: {
+        agent_id: stored.agentId,
         integration_id: input.integration.id,
         workspace_id: meta.workspace_id,
       },
@@ -120,6 +164,7 @@ export async function completeOAuth(
       workspace_name: meta.workspace_name,
     },
     create: {
+      agent_id: stored.agentId,
       integration_id: input.integration.id,
       workspace_id: meta.workspace_id,
       workspace_name: meta.workspace_name,
@@ -133,6 +178,7 @@ export async function completeOAuth(
 
   return {
     install_id: install.install_id,
+    agent_id: install.agent_id,
     workspace_name: install.workspace_name,
   };
 }
@@ -148,6 +194,7 @@ export async function getAccessToken(
 ): Promise<string> {
   const install = await prisma.integrationInstall.findUniqueOrThrow({
     where: { install_id },
+    include: { config: true },
   });
 
   const expires = install.expires_at?.getTime();
@@ -159,9 +206,12 @@ export async function getAccessToken(
     integration.oauth.refresh &&
     install.refresh_token !== null
   ) {
-    const refreshed = await integration.oauth.refresh(
-      decryptToken(install.refresh_token),
-    );
+    const clientSecret = decryptToken(install.config.client_secret_enc);
+    const refreshed = await integration.oauth.refresh({
+      refreshToken: decryptToken(install.refresh_token),
+      clientId: install.config.client_id,
+      clientSecret,
+    });
     const newExpires =
       typeof refreshed.expires_in === "number"
         ? new Date(Date.now() + refreshed.expires_in * 1000)
