@@ -86,6 +86,41 @@ const POLL_INTERVAL_MS = 5000;
 const NEAR_BOTTOM_PX = 200;
 const COUNTDOWN_TICK_MS = 30_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+// Re-render the spawn-progress card every 250ms so the elapsed-time counter
+// and the auto-advancing step indicator both stay smooth. 5s session-status
+// polling is too coarse for the elapsed counter; this is purely client-side.
+const SPAWN_PROGRESS_TICK_MS = 250;
+
+// Auto-advancing step thresholds for the creating-state UI.
+//
+// The backend doesn't (yet) emit phase info — cold spawn is a single
+// runTask + waitRunning + waitHttpReady + harness handshake with no
+// intermediate progress events. So the UI guesses the current step from
+// the elapsed wall clock instead.
+//
+// This is a lie. A pod that's slow to schedule will look stuck on
+// "Cloning repo" because the threshold fired before pod-scheduling
+// actually finished. Phase 2 of this work wires real phase data from the
+// backend onto the Session row; until then, time-based is good enough
+// signal that "something is happening" — better than a frozen spinner.
+//
+// Tuned to a typical happy-path cold spawn (~40s):
+//   0-2s   Creating sandbox    (runTask returning)
+//   2-10s  Pod scheduling      (waitRunningGetUrl)
+//   10-25s Image pull / boot   (container starting)
+//   25-35s Harness ready       (waitHttpReady)
+//   35s+   Cloning repo        (harnessCreateSession + initial work)
+interface SpawnStep {
+  label: string;
+  fromMs: number;
+}
+const SPAWN_STEPS: SpawnStep[] = [
+  { label: "Creating sandbox", fromMs: 0 },
+  { label: "Pod scheduling", fromMs: 2_000 },
+  { label: "Image pull / boot", fromMs: 10_000 },
+  { label: "Harness ready", fromMs: 25_000 },
+  { label: "Cloning repo", fromMs: 35_000 },
+];
 
 // Render the idle-reap countdown for a `ready` sandbox. Reconciler reaps
 // `ready` sessions that haven't had message activity within
@@ -686,12 +721,26 @@ function MainPanel({
           {loading && messages.length === 0 && (
             <div className="text-[13px] text-gray-400">Loading…</div>
           )}
-          {!loading && messages.length === 0 && !isReady && (
-            <div className="text-[13px] text-gray-400">
-              Sandbox is {statusLabel}. Wait for it to become{" "}
-              <span className="font-mono">ready</span> before sending a message.
-            </div>
+          {!loading && session && statusLabel === "creating" && (
+            <SpawnProgress session={session} />
           )}
+          {!loading &&
+            session &&
+            statusLabel === "failed" &&
+            session.failure_reason && (
+              <SpawnFailed reason={session.failure_reason} />
+            )}
+          {!loading &&
+            messages.length === 0 &&
+            !isReady &&
+            statusLabel !== "creating" &&
+            statusLabel !== "failed" && (
+              <div className="text-[13px] text-gray-400">
+                Sandbox is {statusLabel}. Wait for it to become{" "}
+                <span className="font-mono">ready</span> before sending a
+                message.
+              </div>
+            )}
           {!loading && messages.length === 0 && isReady && (
             <div className="text-[13px] text-gray-400">
               Sandbox is ready. Send a message below.
@@ -1098,4 +1147,120 @@ function Composer({
       </div>
     </div>
   );
+}
+
+// =====================================================================
+// SPAWN PROGRESS — creating-state UI
+// =====================================================================
+
+// Cursor-style progress card shown while the backend bring-up runs.
+// Replaces the previous "Sandbox is creating. Wait…" text. Steps advance
+// on elapsed wall-clock thresholds (see SPAWN_STEPS for why this is
+// approximate — phase 2 will wire real backend phase data).
+function SpawnProgress({ session }: { session: SessionRow }) {
+  // `Date.now()` is impure — keep it out of render. Stash the start
+  // timestamp on first render via a ref (init via `useState` lazy
+  // initializer, which only runs once) and let the interval tick the
+  // "now" value through useState. Same pattern as the formatExpiresIn
+  // countdown above.
+  const [startMs] = useState<number>(() => {
+    if (!session.created_at) return Date.now();
+    const t = Date.parse(session.created_at);
+    return Number.isNaN(t) ? Date.now() : t;
+  });
+
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setNowMs(Date.now()),
+      SPAWN_PROGRESS_TICK_MS,
+    );
+    return () => window.clearInterval(id);
+  }, []);
+
+  const elapsedMs = Math.max(0, nowMs - startMs);
+
+  // Find the current step — the last step whose `fromMs` threshold has
+  // already passed. We don't show a "done" terminal state because the
+  // session view swaps to the chat thread when status flips to `ready`.
+  let activeIdx = 0;
+  for (let i = 0; i < SPAWN_STEPS.length; i++) {
+    if (elapsedMs >= SPAWN_STEPS[i].fromMs) activeIdx = i;
+  }
+
+  return (
+    <div className="border border-gray-200 bg-white rounded-xl shadow-sm px-6 py-5 max-w-md mx-auto w-full">
+      <div className="flex items-center gap-2 mb-1">
+        <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+        <span className="text-[15px] font-medium text-gray-800">
+          Spinning up sandbox…
+        </span>
+      </div>
+      <div className="mono text-[11px] text-gray-400 mb-4">
+        elapsed {formatElapsed(elapsedMs)}
+      </div>
+      <ol className="flex flex-col gap-2">
+        {SPAWN_STEPS.map((step, i) => {
+          const isActive = i === activeIdx;
+          const isDone = i < activeIdx;
+          return (
+            <li
+              key={step.label}
+              className="flex items-center gap-2 text-[13px]"
+            >
+              <span
+                aria-hidden
+                className={`shrink-0 size-1.5 rounded-full ${
+                  isActive
+                    ? "bg-amber-500"
+                    : isDone
+                      ? "bg-emerald-500"
+                      : "bg-gray-300"
+                }`}
+              />
+              <span
+                className={
+                  isActive
+                    ? "text-gray-900 font-medium"
+                    : isDone
+                      ? "text-gray-500"
+                      : "text-gray-400"
+                }
+              >
+                {step.label}
+              </span>
+              {isActive && (
+                <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <div className="mt-4 text-[11px] text-gray-400 leading-relaxed">
+        Cold start typically takes 30-90s. You can navigate away and come
+        back — bring-up runs in the background.
+      </div>
+    </div>
+  );
+}
+
+function SpawnFailed({ reason }: { reason: string }) {
+  return (
+    <div className="border border-red-200 bg-red-50 rounded-xl px-4 py-3 max-w-md mx-auto w-full">
+      <div className="text-[13px] font-medium text-red-800">
+        Sandbox failed to start
+      </div>
+      <div className="mono text-[11px] text-red-700 mt-1 break-words">
+        {reason}
+      </div>
+    </div>
+  );
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${s}s`;
 }
