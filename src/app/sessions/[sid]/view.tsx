@@ -86,41 +86,10 @@ const POLL_INTERVAL_MS = 5000;
 const NEAR_BOTTOM_PX = 200;
 const COUNTDOWN_TICK_MS = 30_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
-// Re-render the spawn-progress card every 250ms so the elapsed-time counter
-// and the auto-advancing step indicator both stay smooth. 5s session-status
-// polling is too coarse for the elapsed counter; this is purely client-side.
+// Re-render the spawn-progress card every 250ms so the elapsed-time
+// counter stays smooth. 5s session-status polling is too coarse for the
+// elapsed counter; this is purely client-side.
 const SPAWN_PROGRESS_TICK_MS = 250;
-
-// Auto-advancing step thresholds for the creating-state UI.
-//
-// The backend doesn't (yet) emit phase info — cold spawn is a single
-// runTask + waitRunning + waitHttpReady + harness handshake with no
-// intermediate progress events. So the UI guesses the current step from
-// the elapsed wall clock instead.
-//
-// This is a lie. A pod that's slow to schedule will look stuck on
-// "Cloning repo" because the threshold fired before pod-scheduling
-// actually finished. Phase 2 of this work wires real phase data from the
-// backend onto the Session row; until then, time-based is good enough
-// signal that "something is happening" — better than a frozen spinner.
-//
-// Tuned to a typical happy-path cold spawn (~40s):
-//   0-2s   Creating sandbox    (runTask returning)
-//   2-10s  Pod scheduling      (waitRunningGetUrl)
-//   10-25s Image pull / boot   (container starting)
-//   25-35s Harness ready       (waitHttpReady)
-//   35s+   Cloning repo        (harnessCreateSession + initial work)
-interface SpawnStep {
-  label: string;
-  fromMs: number;
-}
-const SPAWN_STEPS: SpawnStep[] = [
-  { label: "Creating sandbox", fromMs: 0 },
-  { label: "Pod scheduling", fromMs: 2_000 },
-  { label: "Image pull / boot", fromMs: 10_000 },
-  { label: "Harness ready", fromMs: 25_000 },
-  { label: "Cloning repo", fromMs: 35_000 },
-];
 
 // Render the idle-reap countdown for a `ready` sandbox. Reconciler reaps
 // `ready` sessions that haven't had message activity within
@@ -1153,16 +1122,21 @@ function Composer({
 // SPAWN PROGRESS — creating-state UI
 // =====================================================================
 
-// Cursor-style progress card shown while the backend bring-up runs.
-// Replaces the previous "Sandbox is creating. Wait…" text. Steps advance
-// on elapsed wall-clock thresholds (see SPAWN_STEPS for why this is
-// approximate — phase 2 will wire real backend phase data).
+// Spinner card shown while the backend bring-up runs.
+//
+// We deliberately render no step list here. The previous version walked
+// through 5 named steps (creating / scheduling / image pull / harness /
+// clone) on elapsed wall-clock thresholds, but the backend doesn't emit
+// phase data yet — so the highlighted step was a guess and lied in
+// production (e.g. card stuck on "Cloning repo" long after the repo was
+// already cloned). Until the platform writes a real `phase` field to the
+// Session row, we just show a spinner + elapsed counter and tell the user
+// what to do if it stalls.
 function SpawnProgress({ session }: { session: SessionRow }) {
   // `Date.now()` is impure — keep it out of render. Stash the start
-  // timestamp on first render via a ref (init via `useState` lazy
-  // initializer, which only runs once) and let the interval tick the
-  // "now" value through useState. Same pattern as the formatExpiresIn
-  // countdown above.
+  // timestamp on first render via a useState lazy initializer (only runs
+  // once) and let the interval tick the "now" value through useState.
+  // Same pattern as the formatExpiresIn countdown above.
   const [startMs] = useState<number>(() => {
     if (!session.created_at) return Date.now();
     const t = Date.parse(session.created_at);
@@ -1180,14 +1154,6 @@ function SpawnProgress({ session }: { session: SessionRow }) {
 
   const elapsedMs = Math.max(0, nowMs - startMs);
 
-  // Find the current step — the last step whose `fromMs` threshold has
-  // already passed. We don't show a "done" terminal state because the
-  // session view swaps to the chat thread when status flips to `ready`.
-  let activeIdx = 0;
-  for (let i = 0; i < SPAWN_STEPS.length; i++) {
-    if (elapsedMs >= SPAWN_STEPS[i].fromMs) activeIdx = i;
-  }
-
   return (
     <div className="border border-gray-200 bg-white rounded-xl shadow-sm px-6 py-5 max-w-md mx-auto w-full">
       <div className="flex items-center gap-2 mb-1">
@@ -1199,46 +1165,9 @@ function SpawnProgress({ session }: { session: SessionRow }) {
       <div className="mono text-[11px] text-gray-400 mb-4">
         elapsed {formatElapsed(elapsedMs)}
       </div>
-      <ol className="flex flex-col gap-2">
-        {SPAWN_STEPS.map((step, i) => {
-          const isActive = i === activeIdx;
-          const isDone = i < activeIdx;
-          return (
-            <li
-              key={step.label}
-              className="flex items-center gap-2 text-[13px]"
-            >
-              <span
-                aria-hidden
-                className={`shrink-0 size-1.5 rounded-full ${
-                  isActive
-                    ? "bg-amber-500"
-                    : isDone
-                      ? "bg-emerald-500"
-                      : "bg-gray-300"
-                }`}
-              />
-              <span
-                className={
-                  isActive
-                    ? "text-gray-900 font-medium"
-                    : isDone
-                      ? "text-gray-500"
-                      : "text-gray-400"
-                }
-              >
-                {step.label}
-              </span>
-              {isActive && (
-                <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
-              )}
-            </li>
-          );
-        })}
-      </ol>
-      <div className="mt-4 text-[11px] text-gray-400 leading-relaxed">
-        Cold start typically takes 30-90s. You can navigate away and come
-        back — bring-up runs in the background.
+      <div className="text-[12px] text-gray-500 leading-relaxed">
+        Bring-up usually takes a few seconds. If this card sits for longer
+        than a minute, the bring-up may have stalled — refresh to retry.
       </div>
     </div>
   );
