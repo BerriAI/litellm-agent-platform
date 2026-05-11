@@ -21,15 +21,22 @@ import {
   ChevronDown,
   Wrench,
   RotateCw,
+  Stethoscope,
+  RefreshCw,
+  Copy,
+  Check,
 } from "lucide-react";
 import {
   ApiError,
   AgentRow,
+  DiagnoseDetectedIssue,
+  DiagnoseResponse,
   HarnessMessage,
   HarnessMessagePart,
   SessionRow,
   api,
   getAgent,
+  getDiagnose,
   getSandboxLogs,
   getSession,
   listSessionMessages,
@@ -661,6 +668,11 @@ function MainPanel({
   const expiresLabel = formatExpiresIn(session, nowMs);
   const canRestart = !!session && statusLabel !== "creating";
 
+  // Diagnose panel — universally available regardless of session state.
+  // Slow/misbehaving ready sessions need it as much as stuck/failed ones,
+  // so we mount the button on every status.
+  const [diagnoseOpen, setDiagnoseOpen] = useState<boolean>(false);
+
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-white overflow-hidden">
       {/* Header */}
@@ -719,6 +731,16 @@ function MainPanel({
         <div className="flex items-center gap-2 text-gray-400">
           <button
             type="button"
+            onClick={() => session && setDiagnoseOpen(true)}
+            disabled={!session}
+            title="Diagnose — fetch pod, service, node, warm-pool, and harness-probe state"
+            className="inline-flex items-center gap-1.5 text-[12px] text-gray-600 border border-gray-200 rounded px-2 py-1 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <Stethoscope className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Diagnose</span>
+          </button>
+          <button
+            type="button"
             onClick={handleRestart}
             disabled={!canRestart || restarting}
             title={
@@ -747,6 +769,13 @@ function MainPanel({
           </button>
         </div>
       </div>
+
+      {session && diagnoseOpen && (
+        <DiagnosePanel
+          sessionId={session.id}
+          onClose={() => setDiagnoseOpen(false)}
+        />
+      )}
 
       {/* Scrollable thread */}
       <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto">
@@ -1343,6 +1372,366 @@ interface SandboxLogsProps {
    * snapshot of whatever it has and stops fetching.
    */
   isCreating: boolean;
+}
+
+// =====================================================================
+// DIAGNOSE PANEL — one-shot debug bundle modal
+// =====================================================================
+
+// Section keys rendered as collapsible accordions, in the order they appear
+// in the modal. `pod_logs_tail` and `detected_issues` are surfaced separately
+// (logs in a dark terminal-style pre, issues as colored cards up top).
+const DIAGNOSE_SECTIONS: ReadonlyArray<{ key: string; label: string }> = [
+  { key: "session", label: "session" },
+  { key: "agent", label: "agent" },
+  { key: "pod", label: "pod" },
+  { key: "sandbox_cr", label: "sandbox_cr" },
+  { key: "service", label: "service" },
+  { key: "node", label: "node" },
+  { key: "image_cache", label: "image_cache" },
+  { key: "warm_pool", label: "warm_pool" },
+  { key: "harness_probe", label: "harness_probe" },
+  { key: "notes", label: "notes" },
+];
+
+interface DiagnosePanelProps {
+  sessionId: string;
+  onClose: () => void;
+}
+
+/**
+ * Full-screen modal that fetches the one-shot diagnose bundle and renders it.
+ * Layout: detected_issues at the top as colored cards (red/yellow/blue by
+ * severity), then a terminal-style pod_logs_tail, then collapsible sections
+ * for every other top-level key. Refresh re-fetches without closing; Copy
+ * JSON puts the raw response on the clipboard.
+ *
+ * The fetch lives in a useEffect keyed on `refreshKey` so the initial load
+ * fires once on mount and re-fires only when the user clicks Refresh — not on
+ * every re-render. An AbortController tears down the in-flight request when
+ * the modal closes or another refresh starts.
+ */
+function DiagnosePanel({ sessionId, onClose }: DiagnosePanelProps) {
+  const [data, setData] = useState<DiagnoseResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState<number>(0);
+  const [copied, setCopied] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ctl = new AbortController();
+    // Keep all state mutations inside the async task so they fire after the
+    // effect body returns — sidesteps `react-hooks/set-state-in-effect` and
+    // matches the queue-drain pattern used elsewhere in this file.
+    void (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const resp = await getDiagnose(sessionId, { signal: ctl.signal });
+        if (cancelled) return;
+        setData(resp);
+      } catch (e) {
+        if (cancelled) return;
+        if ((e as { name?: string })?.name === "AbortError") return;
+        const msg = e instanceof ApiError ? e.message : (e as Error).message;
+        setError(msg);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      ctl.abort();
+    };
+  }, [sessionId, refreshKey]);
+
+  // Esc-to-close. Captured on the document so a focused element inside the
+  // modal (a collapsed-section button, the textarea, etc.) doesn't swallow it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const handleCopy = useCallback(async () => {
+    if (!data) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard write can fail (insecure context, permission denied).
+      // Surface as a transient error so the user knows it didn't go through.
+      setError("Copy to clipboard failed");
+    }
+  }, [data]);
+
+  const issues = Array.isArray(data?.detected_issues) ? data.detected_issues : [];
+  const logsTail = extractLogsTail(data?.pod_logs_tail);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Stethoscope className="w-4 h-4 text-gray-600" />
+            <span className="text-[14px] font-medium text-gray-800">
+              Diagnose
+            </span>
+            <span className="mono text-[11px] text-gray-400">
+              session {sessionId.slice(0, 8)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRefreshKey((k) => k + 1)}
+              disabled={loading}
+              title="Re-fetch"
+              className="inline-flex items-center gap-1.5 text-[12px] text-gray-600 border border-gray-200 rounded px-2 py-1 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {loading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              <span>Refresh</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={!data || loading}
+              title="Copy full JSON to clipboard"
+              className="inline-flex items-center gap-1.5 text-[12px] text-gray-600 border border-gray-200 rounded px-2 py-1 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {copied ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              <span>{copied ? "Copied" : "Copy JSON"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              title="Close"
+              className="p-1.5 hover:bg-gray-100 rounded text-gray-500"
+              aria-label="Close"
+            >
+              <span aria-hidden>×</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="px-4 py-4 flex flex-col gap-4">
+            {loading && !data && (
+              <div className="flex items-center gap-2 text-[13px] text-gray-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Gathering diagnostics…
+              </div>
+            )}
+
+            {error && (
+              <div className="border border-red-200 bg-red-50 rounded-lg px-4 py-3 text-[13px] text-red-800">
+                <div className="font-medium">Diagnose failed</div>
+                <div className="mono text-[11px] text-red-700 mt-1 break-words">
+                  {error}
+                </div>
+              </div>
+            )}
+
+            {data && (
+              <>
+                <DetectedIssuesList issues={issues} />
+
+                {logsTail && (
+                  <DiagnoseLogsSection
+                    text={logsTail.text}
+                    error={logsTail.error}
+                  />
+                )}
+
+                <div className="flex flex-col gap-2">
+                  {DIAGNOSE_SECTIONS.map((s) => {
+                    if (!(s.key in data)) return null;
+                    return (
+                      <DiagnoseSection
+                        key={s.key}
+                        label={s.label}
+                        value={(data as Record<string, unknown>)[s.key]}
+                      />
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetectedIssuesList({
+  issues,
+}: {
+  issues: DiagnoseDetectedIssue[];
+}) {
+  if (issues.length === 0) {
+    return (
+      <div className="border border-emerald-200 bg-emerald-50 rounded-lg px-4 py-3">
+        <div className="text-[13px] font-medium text-emerald-800">
+          No issues detected
+        </div>
+        <div className="text-[12px] text-emerald-700 mt-0.5">
+          The diagnostic ruleset did not flag anything. If the session is still
+          misbehaving, inspect the pod_logs_tail and harness_probe sections
+          below.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {issues.map((iss, i) => (
+        <IssueCard key={`${iss.code}-${i}`} issue={iss} />
+      ))}
+    </div>
+  );
+}
+
+function IssueCard({ issue }: { issue: DiagnoseDetectedIssue }) {
+  const palette =
+    issue.severity === "high"
+      ? "border-red-200 bg-red-50 text-red-800"
+      : issue.severity === "med"
+        ? "border-amber-200 bg-amber-50 text-amber-900"
+        : "border-blue-200 bg-blue-50 text-blue-900";
+  const codeColor =
+    issue.severity === "high"
+      ? "text-red-700"
+      : issue.severity === "med"
+        ? "text-amber-800"
+        : "text-blue-800";
+  return (
+    <div className={`border rounded-lg px-4 py-3 ${palette}`}>
+      <div className="flex items-center gap-2">
+        <span
+          className={`mono text-[11px] uppercase tracking-wide ${codeColor}`}
+        >
+          {issue.severity}
+        </span>
+        <span className={`mono text-[11px] ${codeColor}`}>{issue.code}</span>
+      </div>
+      <div className="text-[13px] mt-1 leading-relaxed">{issue.message}</div>
+      {issue.recommended_action && (
+        <div className="text-[12px] mt-2 leading-relaxed opacity-90">
+          <span className="font-medium">Recommended: </span>
+          {issue.recommended_action}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The backend sends pod_logs_tail in two possible shapes — the structured
+// `{ available, text?, error? }` envelope used in route.ts today, and a bare
+// string (older callers / docs). Handle both so the UI doesn't break if the
+// envelope ever loosens.
+function extractLogsTail(
+  value: unknown,
+): { text: string; error?: string } | null {
+  if (typeof value === "string") return { text: value };
+  if (value && typeof value === "object") {
+    const v = value as Record<string, unknown>;
+    const text = typeof v.text === "string" ? v.text : "";
+    const error = typeof v.error === "string" ? v.error : undefined;
+    if (text || error) return { text, error };
+  }
+  return null;
+}
+
+function DiagnoseLogsSection({
+  text,
+  error,
+}: {
+  text: string;
+  error?: string;
+}) {
+  const [open, setOpen] = useState<boolean>(true);
+  return (
+    <div className="rounded-lg border border-gray-200 overflow-hidden bg-white">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 border-b border-gray-200"
+      >
+        <ChevronDown
+          className={`w-3 h-3 text-gray-400 transition-transform ${
+            open ? "" : "-rotate-90"
+          }`}
+        />
+        <span className="mono text-[11px] text-gray-500">pod_logs_tail</span>
+        <span className="mono text-[11px] text-gray-400 ml-auto">
+          {error ? "error" : "last 200 lines"}
+        </span>
+      </button>
+      {open && (
+        <pre
+          className="mono text-[11px] leading-snug whitespace-pre-wrap break-words px-3 py-2 overflow-y-auto"
+          style={{
+            maxHeight: 320,
+            backgroundColor: "#1c1b18",
+            color: "#e8e4dc",
+          }}
+        >
+          {error ? (
+            <span className="text-amber-300 italic">{error}</span>
+          ) : text.length === 0 ? (
+            <span className="text-gray-500 italic">(empty)</span>
+          ) : (
+            text
+          )}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function DiagnoseSection({ label, value }: { label: string; value: unknown }) {
+  const [open, setOpen] = useState<boolean>(false);
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50"
+      >
+        <ChevronDown
+          className={`w-3 h-3 text-gray-400 transition-transform ${
+            open ? "" : "-rotate-90"
+          }`}
+        />
+        <span className="mono text-[12px] text-gray-700">{label}</span>
+      </button>
+      {open && (
+        <pre className="mono text-[11px] text-gray-700 whitespace-pre-wrap break-words bg-gray-50 border-t border-gray-200 px-3 py-2 max-h-80 overflow-auto">
+          {JSON.stringify(value, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 function SandboxLogs({ sessionId, isCreating }: SandboxLogsProps) {

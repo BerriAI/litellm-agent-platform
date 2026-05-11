@@ -589,6 +589,56 @@ export function restartSession(
   );
 }
 
+// ---------- Session diagnose (one-shot debug bundle) ----------
+
+/**
+ * Shape returned by `GET /sessions/{id}/diagnose`. The endpoint is
+ * intentionally permissive — every sub-section can be `{ exists: false }`,
+ * `{ error: string }`, or partial. We keep everything `unknown` and narrow
+ * inside the UI so a schema change on the backend doesn't break the build.
+ */
+export interface DiagnoseDetectedIssue {
+  code: string;
+  severity: "high" | "med" | "info";
+  message: string;
+  recommended_action?: string;
+}
+
+export interface DiagnoseResponse {
+  session?: unknown;
+  agent?: unknown;
+  pod?: unknown;
+  sandbox_cr?: unknown;
+  service?: unknown;
+  pod_logs_tail?: unknown;
+  node?: unknown;
+  image_cache?: unknown;
+  warm_pool?: unknown;
+  harness_probe?: unknown;
+  detected_issues?: DiagnoseDetectedIssue[];
+  notes?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Fetch the one-shot debug bundle for a session. The backend gathers pod,
+ * service, node, warm-pool, image-cache, and harness-probe state in parallel
+ * and runs a deterministic ruleset to surface known failure patterns. See
+ * the route handler at /api/v1/managed_agents/sessions/[session_id]/diagnose
+ * for the full response shape.
+ */
+export function getDiagnose(
+  sessionId: string,
+  init?: ApiInit,
+): Promise<DiagnoseResponse> {
+  return api<DiagnoseResponse>(
+    "GET",
+    `/v1/managed_agents/sessions/${encodeURIComponent(sessionId)}/diagnose`,
+    undefined,
+    init,
+  );
+}
+
 // ---------- Sandbox pod logs (creating-state debugging) ----------
 
 export interface SandboxLogsOpts {
