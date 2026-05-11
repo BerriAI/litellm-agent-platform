@@ -7,15 +7,14 @@
  *   - activity.ts — agentActivityCreate on outbound SessionEvent
  *   - prompt.ts   — issue → harness prompt
  *
- * `enabled()` returns false until the operator sets LINEAR_CLIENT_ID,
- * LINEAR_CLIENT_SECRET, and LINEAR_WEBHOOK_SECRET. The registry skips
- * disabled integrations; their routes return 404. This lets the package
- * ship with Linear support compiled in without forcing every deployment
- * to configure it.
+ * No env vars. The operator creates a Linear OAuth app, pastes its
+ * credentials into the agent's Integrations panel, and the platform stores
+ * them encrypted at rest in `agent_integration_config`. Every per-agent
+ * OAuth dance + webhook uses those credentials.
  */
 
 import type { Integration } from "../../core/types";
-import { buildOAuthAdapter } from "./oauth";
+import { buildOAuthAdapter, SCOPES } from "./oauth";
 import { buildWebhookAdapter } from "./webhook";
 import { postActivity } from "./activity";
 
@@ -24,14 +23,8 @@ const integration: Integration = {
   displayName: "Linear",
   icon: "/integrations/linear.svg",
   docsUrl: "https://linear.app/developers/agents",
-
-  enabled() {
-    return Boolean(
-      process.env.LINEAR_CLIENT_ID &&
-        process.env.LINEAR_CLIENT_SECRET &&
-        process.env.LINEAR_WEBHOOK_SECRET,
-    );
-  },
+  appCreateUrl: "https://linear.app/settings/api/applications/new",
+  scopes: SCOPES,
 
   oauth: buildOAuthAdapter(),
   webhook: buildWebhookAdapter(),
