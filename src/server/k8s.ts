@@ -465,7 +465,7 @@ export async function stopTask(
 // waitRunningGetUrl — wait for pod Running + read assigned NodePort
 // ---------------------------------------------------------------------------
 
-async function readNodePort(name: string): Promise<number | null> {
+export async function readNodePort(name: string): Promise<number | null> {
   try {
     const svc = await coreApi().readNamespacedService({
       name: svcName(name),
@@ -501,7 +501,7 @@ async function readNodePort(name: string): Promise<number | null> {
  * spin until DEFAULT_RUNNING_TIMEOUT_MS. The contract is verified by the
  * spawn smoke test ("First spawn lands a Sandbox + Service, reaches ready").
  */
-async function readPodPhase(
+export async function readPodPhase(
   name: string,
 ): Promise<{ phase: string | undefined; reason: string | undefined }> {
   try {
@@ -566,7 +566,7 @@ async function discoverNodeHost(): Promise<string> {
   throw new Error("no Ready node with ExternalIP found in cluster");
 }
 
-async function resolveNodeHost(): Promise<string> {
+export async function resolveNodeHost(): Promise<string> {
   const cfg = env.K8S_NODE_HOST;
   if (!cfg || cfg === "auto") return discoverNodeHost();
   return cfg;
