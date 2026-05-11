@@ -116,8 +116,6 @@ export type IntegrationEvent =
   | {
       kind: "new_task";
       external_session_id: string;
-      /** Which LAP agent should handle this — matched against AgentIntegrationBinding.agent_id. */
-      target_agent_id: string;
       prompt: string;
       /** Optional human label (e.g. "LIT-1234") used in logs and the first thought ack. */
       external_ref?: string;
