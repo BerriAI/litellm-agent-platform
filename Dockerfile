@@ -16,7 +16,8 @@ WORKDIR /app
 
 # Only copy lockfiles first so `npm ci` is cached unless deps change.
 COPY package.json package-lock.json ./
-RUN npm ci --legacy-peer-deps
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --legacy-peer-deps
 
 # ---------- 2. build ----------
 FROM node:20-alpine AS builder
@@ -31,11 +32,14 @@ COPY . .
 # `npm ci` ran in the `deps` stage without prisma/schema.prisma in scope, so
 # the Prisma client wasn't generated. Generate it here once the schema is
 # present, before `next build` typechecks against `Prisma.*` types.
-RUN npx prisma generate
+RUN --mount=type=cache,target=/root/.npm \
+    npx prisma generate
 
 # `output: "standalone"` in next.config.ts emits .next/standalone with a
 # minimal node_modules — that's what the runtime stage runs.
-RUN npm run build
+RUN --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/app/.next/cache \
+    npm run build
 
 # ---------- 3. prisma migrate (compose init container) ----------
 # `docker-compose.yml`'s db-migrate service builds this stage and runs it once
