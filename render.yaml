@@ -47,6 +47,11 @@ services:
         echo "$KUBE_CONFIG_B64" | base64 -d > /tmp/kubeconfig
         export KUBECONFIG=/tmp/kubeconfig
       fi
+      # Sync schema with the database on every boot. `db push` is idempotent
+      # (~50-100ms when nothing needs to change), and doesn't take the
+      # advisory lock that `migrate deploy` does, so it's safe on hot
+      # deploys. Required so schema changes ship without a manual step.
+      npx prisma db push --accept-data-loss --skip-generate
       npm start
     healthCheckPath: /login
     envVars:
@@ -89,6 +94,12 @@ services:
         value: auto
       - key: K8S_HARNESS_IMAGE
         sync: false
+      # Base URL the in-sandbox harness pods use to call back into this
+      # platform — specifically the agent memory endpoints (save_memory /
+      # search_memory). Empty disables those tools gracefully; set to the
+      # public URL so EKS pods can reach the API.
+      - key: LAP_BASE_URL
+        value: https://litellm-agent-platform.onrender.com
       - key: K8S_NAMESPACE
         value: default
       - key: K8S_NODEPORT_MIN
@@ -153,6 +164,12 @@ services:
         value: auto
       - key: K8S_HARNESS_IMAGE
         sync: false
+      # Base URL the in-sandbox harness pods use to call back into this
+      # platform — specifically the agent memory endpoints (save_memory /
+      # search_memory). Empty disables those tools gracefully; set to the
+      # public URL so EKS pods can reach the API.
+      - key: LAP_BASE_URL
+        value: https://litellm-agent-platform.onrender.com
       - key: K8S_NAMESPACE
         value: default
       - key: K8S_NODEPORT_MIN
