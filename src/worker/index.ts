@@ -91,59 +91,86 @@ const subscribers = new Map<string, Subscriber>();
  * or an unrecoverable error happens. Cleans up its own subscribers entry
  * on exit.
  */
+/**
+ * One round-trip through the harness SSE — opens the stream, reads
+ * frames, persists events. Returns on signal abort or stream close.
+ * Throws on undici socket errors; the outer loop reconnects.
+ */
+async function pumpOnce(
+  session_id: string,
+  sandbox_url: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const upstream = await harnessOpenEventStream({ sandbox_url, signal });
+  if (!upstream.body) return;
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+
+  while (!signal.aborted) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    pending += decoder.decode(value, { stream: true });
+    for (;;) {
+      const idx = pending.indexOf("\n\n");
+      if (idx < 0) break;
+      const frame = pending.slice(0, idx);
+      pending = pending.slice(idx + 2);
+      for (const line of frame.split(/\r?\n/)) {
+        if (!line.startsWith("data:")) continue;
+        const raw = line.slice(5).trimStart();
+        if (!raw) continue;
+        let event: SessionEvent;
+        try {
+          event = JSON.parse(raw) as SessionEvent;
+        } catch {
+          continue;
+        }
+        // Defensive: ignore frames that don't carry a recognised `type`.
+        // The harness's SessionEventTranslator is the single source of
+        // truth — anything else on the wire is wire-protocol noise (e.g.
+        // SSE comments, keep-alive pings) and should be dropped.
+        if (!event || typeof event.type !== "string") continue;
+        try {
+          await appendSessionEvent(session_id, event);
+        } catch (e) {
+          console.error(
+            `session_events: append failed for ${session_id}:`,
+            e,
+          );
+        }
+      }
+    }
+  }
+}
+
 async function runSessionSubscriber(
   session_id: string,
   sandbox_url: string,
   signal: AbortSignal,
 ): Promise<void> {
+  // Reconnect loop. A harness restart sends a TCP RST that surfaces as
+  // an undici `TypeError: terminated`; without this loop the subscriber
+  // dies on first RST and never comes back. Exponential-ish backoff
+  // capped at 5s so a permanently-dead pod doesn't tight-loop.
+  let backoff = 250;
   try {
-    const upstream = await harnessOpenEventStream({ sandbox_url, signal });
-    if (!upstream.body) return;
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder();
-    let pending = "";
-
     while (!signal.aborted) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += decoder.decode(value, { stream: true });
-      for (;;) {
-        const idx = pending.indexOf("\n\n");
-        if (idx < 0) break;
-        const frame = pending.slice(0, idx);
-        pending = pending.slice(idx + 2);
-        for (const line of frame.split(/\r?\n/)) {
-          if (!line.startsWith("data:")) continue;
-          const raw = line.slice(5).trimStart();
-          if (!raw) continue;
-          let event: SessionEvent;
-          try {
-            event = JSON.parse(raw) as SessionEvent;
-          } catch {
-            continue;
-          }
-          // Defensive: ignore frames that don't carry a recognised `type`.
-          // The harness's SessionEventTranslator is the single source of
-          // truth — anything else on the wire is wire-protocol noise (e.g.
-          // SSE comments, keep-alive pings) and should be dropped.
-          if (!event || typeof event.type !== "string") continue;
-          try {
-            await appendSessionEvent(session_id, event);
-          } catch (e) {
-            console.error(
-              `session_events: append failed for ${session_id}:`,
-              e,
-            );
-          }
-        }
+      try {
+        await pumpOnce(session_id, sandbox_url, signal);
+        // Clean close (`done` from reader.read()). Reconnect immediately —
+        // some proxies idle-close SSE every 30–60s.
+        backoff = 250;
+      } catch (e) {
+        if (signal.aborted) break;
+        console.warn(
+          `session_events: subscriber for ${session_id} disconnected ` +
+            `(${e instanceof Error ? e.message : String(e)}); ` +
+            `reconnecting in ${backoff}ms`,
+        );
+        await new Promise((r) => setTimeout(r, backoff));
+        backoff = Math.min(backoff * 2, 5000);
       }
-    }
-  } catch (e) {
-    if (!signal.aborted) {
-      console.error(
-        `session_events: subscriber for ${session_id} failed:`,
-        e,
-      );
     }
   } finally {
     subscribers.delete(session_id);
