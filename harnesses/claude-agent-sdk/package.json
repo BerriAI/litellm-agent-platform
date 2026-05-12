@@ -5,17 +5,20 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.138",
     "@hono/node-server": "^1.13.0",
+    "@lap/harness-shared": "file:../_shared",
     "@lap/managed-tools": "file:../../managed-tools",
     "hono": "^4.6.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
-    "typescript": "^5.5.0"
+    "@types/node": "^20",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   }
 }
