@@ -600,6 +600,85 @@ export default function SessionEventsDemoPage() {
         ) : null}
 
         {rows.length > 0 ? <DebugEventLog rows={rows} /> : null}
+
+        <MessageInput sid={sid} />
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// Message input — POSTs to /sessions/{id}/message. The 202 response
+// returns immediately; the new SessionEvents stream in via the existing
+// long-poll above, so there's nothing to do here on success besides
+// clear the textarea.
+// =====================================================================
+
+function MessageInput({ sid }: { sid: string }) {
+  const [text, setText] = React.useState("");
+  const [sending, setSending] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  const submit = async (): Promise<void> => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    setErr(null);
+    try {
+      const token = readDemoToken();
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const res = await fetch(
+        `/api/v1/managed_agents/sessions/${encodeURIComponent(sid)}/message`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ text: trimmed }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        setErr(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+        return;
+      }
+      setText("");
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="sticky bottom-4 mt-6">
+      <div className="border border-gray-200 rounded-xl bg-white shadow-sm p-3 flex flex-col gap-2">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+          placeholder="Send a follow-up… (⌘↩ to send)"
+          className="resize-none outline-none text-[14px] text-gray-800 leading-relaxed bg-transparent placeholder:text-gray-400 min-h-[44px]"
+          rows={2}
+          disabled={sending}
+        />
+        <div className="flex items-center gap-2">
+          {err ? (
+            <span className="mono text-[11px] text-red-700">{err}</span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={sending || !text.trim()}
+            className="ml-auto px-3 py-1.5 text-[13px] rounded-md bg-gray-900 text-white hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            {sending ? "Sending…" : "Send"}
+          </button>
+        </div>
       </div>
     </div>
   );
