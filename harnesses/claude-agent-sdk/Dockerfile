@@ -52,6 +52,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /work \
     && chown sandbox:sandbox /work
 
+# gitleaks — secret scanner used by security agent templates.
+# Uses Go-style arch names (x64/arm64), not dpkg names (amd64/arm64).
+ARG GITLEAKS_VERSION=8.18.4
+RUN case "$(uname -m)" in x86_64) GL_ARCH=x64 ;; aarch64) GL_ARCH=arm64 ;; *) GL_ARCH=$(uname -m) ;; esac \
+    && TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_${GL_ARCH}.tar.gz" \
+    && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${TARBALL}" \
+         -o /tmp/gitleaks.tar.gz \
+    && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
+         -o /tmp/gitleaks_checksums.txt \
+    && EXPECTED=$(grep "${TARBALL}" /tmp/gitleaks_checksums.txt | awk '{print $1}') \
+    && echo "${EXPECTED}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
+    && tar -xz -C /usr/local/bin -f /tmp/gitleaks.tar.gz gitleaks \
+    && rm /tmp/gitleaks.tar.gz /tmp/gitleaks_checksums.txt
+
 # uv — installed to a system path so $PATH already finds it for any user.
 # Static binary release; no shell pipe.
 ARG UV_VERSION=0.5.13
