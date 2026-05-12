@@ -1110,11 +1110,14 @@ function ReasoningBlock({ text }: { text: string }) {
   );
 }
 
-// Tool call card. Mirrors the visual contract of the (now-removed)
-// SdkStreamPanel: a framed card with the tool name + status icon, the
-// input JSON pretty-printed underneath, and the output (or error) in a
-// trailing block colored by success/failure. Default-expanded — users
-// were asking to see input/output without an extra click.
+// Tool call card. Heavily emphasized visually so it can't be mistaken for
+// a thinking block: indigo accent on the header, mono tool name in a chip,
+// argument summary inline so even a collapsed-feeling card carries meaning.
+// The body always renders Input + Output sections (em-dash placeholder when
+// missing) so the card has measurable height — earlier versions degraded to
+// header-only with empty `pre` blocks and looked like a stack of hairlines
+// to the user. Default-expanded; users wanted the contents without an extra
+// click.
 function ToolBlock({ part }: { part: HarnessMessagePart }) {
   const toolName = typeof part.tool === "string" ? part.tool : "tool";
   const state = (part.state as Record<string, unknown> | undefined) ?? {};
@@ -1144,42 +1147,143 @@ function ToolBlock({ part }: { part: HarnessMessagePart }) {
         ? output
         : JSON.stringify(output, null, 2);
 
+  // One-line summary of the tool's primary argument — surfaced in the
+  // header so the card is meaningful at a glance even when the input
+  // section is scrolled out of view. Picks the most semantically-loaded
+  // field for the common tools; falls back to the first string-valued
+  // entry of the input object.
+  const summary = pickToolSummary(toolName, input);
+
   return (
-    <div className="rounded-md border border-gray-200 bg-white text-[13px] text-gray-700 overflow-hidden">
-      <div className="px-3 py-2 flex items-center gap-2 border-b border-gray-100">
-        <Wrench className="w-3 h-3 text-gray-400 shrink-0" />
-        <span className="mono text-[12px] text-gray-700">{toolName}</span>
+    <div
+      role="article"
+      aria-label={`Tool ${toolName}: ${summary || status}`}
+      className={
+        "rounded-md border text-[13px] overflow-hidden " +
+        (isError
+          ? "border-red-300 bg-red-50/40"
+          : isRunning
+            ? "border-amber-300 bg-amber-50/40"
+            : "border-indigo-200 bg-indigo-50/30")
+      }
+    >
+      <div
+        className={
+          "px-3 py-2 flex items-center gap-2 border-b " +
+          (isError
+            ? "border-red-200"
+            : isRunning
+              ? "border-amber-200"
+              : "border-indigo-200")
+        }
+      >
+        <Wrench
+          className={
+            "w-3.5 h-3.5 shrink-0 " +
+            (isError
+              ? "text-red-600"
+              : isRunning
+                ? "text-amber-600"
+                : "text-indigo-600")
+          }
+        />
+        <span
+          className={
+            "mono text-[12px] font-semibold px-1.5 py-0.5 rounded " +
+            (isError
+              ? "bg-red-100 text-red-800"
+              : isRunning
+                ? "bg-amber-100 text-amber-800"
+                : "bg-indigo-100 text-indigo-800")
+          }
+        >
+          {toolName}
+        </span>
+        {summary && (
+          <span className="mono text-[12px] text-gray-600 truncate flex-1 min-w-0">
+            {summary}
+          </span>
+        )}
         {isRunning && (
-          <Loader2 className="ml-auto w-3 h-3 text-amber-500 animate-spin" />
+          <Loader2 className="ml-auto w-3.5 h-3.5 text-amber-600 animate-spin shrink-0" />
         )}
         {!isRunning && isDone && (
-          <span className="ml-auto text-emerald-600 text-[12px] leading-none">
+          <span className="ml-auto text-emerald-600 text-[14px] leading-none shrink-0">
             ✓
           </span>
         )}
         {!isRunning && isError && (
-          <span className="ml-auto text-red-600 text-[12px] leading-none">
+          <span className="ml-auto text-red-600 text-[14px] leading-none shrink-0">
             ✗
           </span>
         )}
       </div>
-      {inputStr && (
-        <pre className="px-3 py-2 mono text-[11px] text-gray-600 whitespace-pre-wrap break-words m-0 max-h-64 overflow-auto">
-          {inputStr}
+      <div className="px-3 py-2 border-b border-gray-100/60 bg-white/70">
+        <div className="mono text-[10px] uppercase tracking-wider text-gray-400 mb-1">
+          Input
+        </div>
+        <pre className="mono text-[11px] text-gray-700 whitespace-pre-wrap break-words m-0 max-h-64 overflow-auto">
+          {inputStr || "—"}
         </pre>
-      )}
-      {outputStr && (
+      </div>
+      <div
+        className={
+          "px-3 py-2 " + (isError ? "bg-red-50" : "bg-white/70")
+        }
+      >
+        <div className="mono text-[10px] uppercase tracking-wider text-gray-400 mb-1">
+          {isError ? "Error" : "Output"}
+        </div>
         <pre
           className={
-            "px-3 py-2 mono text-[11px] whitespace-pre-wrap break-words m-0 border-t border-gray-100 max-h-64 overflow-auto " +
-            (isError ? "text-red-700 bg-red-50" : "text-gray-600")
+            "mono text-[11px] whitespace-pre-wrap break-words m-0 max-h-64 overflow-auto " +
+            (isError ? "text-red-800" : "text-gray-700")
           }
         >
-          {outputStr}
+          {outputStr || (isRunning ? "running…" : "—")}
         </pre>
-      )}
+      </div>
     </div>
   );
+}
+
+// Tool-name-aware one-line summary of the call's primary argument. Surfaced
+// in the header alongside the tool name so the card is meaningful before
+// the user scans the Input pre. Returns "" when no good summary is
+// available — caller decides whether to render that slot.
+function pickToolSummary(toolName: string, input: unknown): string {
+  if (input === null || input === undefined) return "";
+  if (typeof input === "string") return truncateOneLine(input, 120);
+  if (typeof input !== "object") return String(input);
+  const obj = input as Record<string, unknown>;
+  const pick = (k: string): string => {
+    const v = obj[k];
+    return typeof v === "string" ? v : "";
+  };
+  const tn = toolName.toLowerCase();
+  let chosen = "";
+  if (tn === "bash") chosen = pick("command");
+  else if (tn === "grep") chosen = pick("pattern");
+  else if (tn === "read" || tn === "edit" || tn === "write")
+    chosen = pick("file_path") || pick("path");
+  else if (tn === "glob") chosen = pick("pattern");
+  if (!chosen) {
+    // Fall back to the first string-valued field (skip booleans/ids).
+    for (const v of Object.values(obj)) {
+      if (typeof v === "string" && v.length > 0) {
+        chosen = v;
+        break;
+      }
+    }
+  }
+  return truncateOneLine(chosen, 120);
+}
+
+function truncateOneLine(s: string, max: number): string {
+  if (!s) return "";
+  const firstLine = s.split(/\r?\n/, 1)[0] ?? s;
+  if (firstLine.length <= max) return firstLine;
+  return firstLine.slice(0, max - 1) + "…";
 }
 
 // =====================================================================
