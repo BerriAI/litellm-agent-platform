@@ -84,10 +84,10 @@ export default function AgentsListPage() {
       });
       setAgents(r.data);
       setTotal(r.total);
+      setLoading(false);
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof ApiError ? e.message : (e as Error).message);
-    } finally {
       setLoading(false);
     }
   }, []);
