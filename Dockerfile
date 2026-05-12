@@ -14,6 +14,14 @@ RUN bash /tmp/install-aws-iam-authenticator.sh /usr/local/bin
 FROM node:20-alpine AS deps
 WORKDIR /app
 
+# Build the workspace `@lap/harness-shared` package first — the platform
+# package.json has a `file:./harnesses/_shared` dep on it, so npm ci needs
+# the compiled output to exist before resolving deps.
+COPY harnesses/_shared ./harnesses/_shared
+RUN cd harnesses/_shared \
+    && npm install --no-audit --no-fund --legacy-peer-deps \
+    && npx tsc
+
 # Only copy lockfiles first so `npm ci` is cached unless deps change.
 COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps
