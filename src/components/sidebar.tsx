@@ -124,11 +124,6 @@ export function Sidebar() {
     };
   }, []);
 
-  const sortedAgents = useMemo(
-    () => [...agents].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b))),
-    [agents],
-  );
-
   const sessionsByAgent = useMemo(() => {
     const m = new Map<string, SessionRow[]>();
     for (const s of sessions) {
@@ -145,6 +140,21 @@ export function Sidebar() {
     }
     return m;
   }, [sessions]);
+
+  // Top 5 agents with most recent session activity.
+  const sortedAgents = useMemo(() => {
+    const lastActiveMs = (a: AgentRow): number => {
+      const agentSessions = sessionsByAgent.get(a.id) ?? [];
+      const times = agentSessions
+        .map((s) => (s.created_at ? new Date(s.created_at).getTime() : 0))
+        .filter((t) => !Number.isNaN(t) && t > 0);
+      return times.length > 0 ? Math.max(...times) : 0;
+    };
+    return [...agents]
+      .filter((a) => (sessionsByAgent.get(a.id) ?? []).length > 0)
+      .sort((a, b) => lastActiveMs(b) - lastActiveMs(a))
+      .slice(0, 5);
+  }, [agents, sessionsByAgent]);
 
   const recentSessions = useMemo(
     () =>
@@ -285,6 +295,7 @@ export function Sidebar() {
           count={sortedAgents.length}
           href="/agents"
           active={pathname === "/agents"}
+          seeAllHref="/agents"
         />
         <ul className="space-y-px">
           {sortedAgents.length === 0 ? (
@@ -442,15 +453,25 @@ interface SectionHeaderProps {
   count: number;
   href?: string;
   active?: boolean;
+  seeAllHref?: string;
 }
 
-function SectionHeader({ label, count, href, active }: SectionHeaderProps) {
+function SectionHeader({ label, count, href, active, seeAllHref }: SectionHeaderProps) {
   const inner = (
     <>
       <span className="truncate">{label}</span>
       <span className="ml-auto tabular-nums text-muted-foreground/60">
         {count}
       </span>
+      {seeAllHref && (
+        <Link
+          href={seeAllHref}
+          onClick={(e) => e.stopPropagation()}
+          className="ml-1 text-muted-foreground/50 transition-colors hover:text-muted-foreground focus-visible:outline-none"
+        >
+          see all →
+        </Link>
+      )}
     </>
   );
   return (
