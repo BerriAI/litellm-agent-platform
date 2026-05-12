@@ -92,8 +92,6 @@ function loadKubeConfig(): k8s.KubeConfig {
       "utf8",
     );
     kc.loadFromString(yaml);
-    const u = kc.getCurrentUser();
-    console.log(`[k8s] kubeconfig loaded: user=${u?.name} hasToken=${!!u?.token} hasExec=${!!u?.exec} tokenPrefix=${u?.token?.slice(0,20)}`);
   } else if (process.env.KUBECONFIG) {
     kc.loadFromFile(process.env.KUBECONFIG);
   } else {
