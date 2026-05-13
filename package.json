@@ -16,7 +16,6 @@
     "@anthropic-ai/claude-agent-sdk": "0.2.138",
     "@base-ui/react": "^1.4.1",
     "@kubernetes/client-node": "^1.4.0",
-    "@lap/harness-shared": "file:./harnesses/_shared",
     "@prisma/client": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -377,24 +377,6 @@ export interface HarnessMessage {
 }
 
 // ============================================================================
-// SessionEvent — re-exported from the harness-shared package
-// ============================================================================
-// The canonical definition lives in `harnesses/_shared/src/session-event.ts`
-// so it's shared with every harness implementation (each harness ships a
-// concrete `SessionEventTranslator` that emits this shape on its /event SSE).
-// Platform code consumes it without further translation.
-export type { SessionEvent } from "@lap/harness-shared/session-event";
-import type { SessionEvent } from "@lap/harness-shared/session-event";
-
-// Row shape returned by GET /sessions/{id}/events
-export interface ApiSessionEvent {
-  session_id: string;
-  seq: number;
-  event: SessionEvent;
-  ts: string; // ISO-8601
-}
-
-// ============================================================================
 // Module signatures — fan-out agents implement against these.
 // ============================================================================
 

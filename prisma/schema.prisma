@@ -67,7 +67,6 @@ model Session {
 
   agent               Agent               @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
   integration_session IntegrationSession?
-  events              SessionEvent[]
 
   @@index([agent_id])
   @@index([status])
@@ -228,16 +227,3 @@ model IntegrationSession {
   @@map("integration_session")
 }
 
-model SessionEvent {
-  session_id String
-  seq        Int
-  event_type String
-  payload    Json
-  ts         DateTime @default(now())
-
-  session    Session  @relation(fields: [session_id], references: [session_id], onDelete: Cascade)
-
-  @@id([session_id, seq])
-  @@index([session_id, seq])
-  @@map("managed_agent_session_event")
-}

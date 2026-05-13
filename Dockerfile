@@ -14,14 +14,6 @@ RUN bash /tmp/install-aws-iam-authenticator.sh /usr/local/bin
 FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Build the workspace `@lap/harness-shared` package first — the platform
-# package.json has a `file:./harnesses/_shared` dep on it, so npm ci needs
-# the compiled output to exist before resolving deps.
-COPY harnesses/_shared ./harnesses/_shared
-RUN cd harnesses/_shared \
-    && npm install --no-audit --no-fund --legacy-peer-deps \
-    && npx tsc
-
 # Only copy lockfiles first so `npm ci` is cached unless deps change.
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -36,12 +28,6 @@ RUN apk add --no-cache openssl
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# `COPY . .` overwrites harnesses/_shared/ from the host, which has no dist/.
-# The `file:` dep symlink at node_modules/@lap/harness-shared then points at
-# a directory with no compiled output, so typecheck fails on imports like
-# `@lap/harness-shared/session-event`. Rebuild dist/ here before next build.
-RUN cd harnesses/_shared && npx tsc
 
 # `npm ci` ran in the `deps` stage without prisma/schema.prisma in scope, so
 # the Prisma client wasn't generated. Generate it here once the schema is
