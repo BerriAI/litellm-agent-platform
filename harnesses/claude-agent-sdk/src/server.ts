@@ -193,7 +193,7 @@ app.post("/session/:id/prompt_async", async (c) => {
   const { text, modelId } = extractTurnInputs(await c.req.json());
   void runTurnForSession(s, text, modelId).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
-    emitToSubscribers(s, { event_id: randomUUID(), type: "error", message: msg });
+    emitToSubscribers(s, { type: "error", message: msg });
   });
   c.status(204);
   return c.body(null);
@@ -205,7 +205,6 @@ app.post("/session/:id/abort", async (c) => {
   if (s.abortController) {
     s.abortController.abort();
     emitToSubscribers(s, {
-      event_id: randomUUID(),
       type: "status",
       status: "ready",
       detail: "aborted",
