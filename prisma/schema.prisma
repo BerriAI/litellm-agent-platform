@@ -196,6 +196,18 @@ model AgentIntegrationBinding {
   @@map("agent_integration_binding")
 }
 
+model Skill {
+  skill_id    String   @id @default(uuid())
+  name        String
+  description String?
+  content     String
+  created_by  String?
+  created_at  DateTime @default(now())
+
+  @@index([created_by])
+  @@map("skill")
+}
+
 /// Maps a medium's session id (e.g. Linear agentSession.id) to a LAP Session.
 /// Written by the dispatcher when a "new_task" event creates a Session;
 /// looked up by "followup" / "cancel" events to find the right LAP session.

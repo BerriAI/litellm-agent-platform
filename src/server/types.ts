@@ -129,8 +129,41 @@ export const UpdateAgentBody = z.object({
   pfp_url: z.string().optional(),
   mcp_servers: z.array(z.string()).optional(),
   harness_image: z.string().optional(),
+  prompt: z.string().optional(),
 });
 export type UpdateAgentBody = z.infer<typeof UpdateAgentBody>;
+
+export const CreateSkillBody = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  content: z.string().min(1),
+});
+export type CreateSkillBody = z.infer<typeof CreateSkillBody>;
+
+export const UpdateSkillBody = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  content: z.string().min(1).optional(),
+});
+export type UpdateSkillBody = z.infer<typeof UpdateSkillBody>;
+
+export interface ApiSkill {
+  id: string;
+  name: string;
+  description: string | null;
+  content: string;
+  created_at: string;
+}
+
+export function toApiSkill(row: { skill_id: string; name: string; description: string | null; content: string; created_at: Date }): ApiSkill {
+  return {
+    id: row.skill_id,
+    name: row.name,
+    description: row.description,
+    content: row.content,
+    created_at: row.created_at.toISOString(),
+  };
+}
 
 export const CreateSessionBody = z.object({
   initial_prompt: z.string().optional(),

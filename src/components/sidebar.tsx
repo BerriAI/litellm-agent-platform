@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronDown, ChevronRight, Plus, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Plus, Settings } from "lucide-react";
 
 import { AgentAvatar } from "@/components/agent-avatar";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -11,8 +11,10 @@ import { cn } from "@/lib/utils";
 import {
   AgentRow,
   SessionRow,
+  SkillRow,
   listAgents,
   listSessions,
+  listSkills,
 } from "@/lib/api";
 
 const REPO_URL = "https://github.com/BerriAI/litellm-agent-platform";
@@ -67,6 +69,7 @@ export function Sidebar() {
 
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [skills, setSkills] = useState<SkillRow[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // Track which agent the current route belongs to so we can auto-expand it.
@@ -103,13 +106,15 @@ export function Sidebar() {
     let cancelled = false;
     async function load() {
       try {
-        const [a, s] = await Promise.all([
+        const [a, s, sk] = await Promise.all([
           listAgents().catch(() => null),
           listSessions().catch(() => null),
+          listSkills().catch(() => null),
         ]);
         if (cancelled) return;
         if (a) setAgents(a);
         if (s) setSessions(s);
+        if (sk) setSkills(sk);
       } catch {
         // silent — sidebar shouldn't crash on transient proxy errors
       }
@@ -405,6 +410,45 @@ export function Sidebar() {
             })
           )}
         </ul>
+        {/* Skills */}
+        <div className="mt-3">
+          <SectionHeader
+            label="Skills"
+            count={skills.length}
+            href="/skills"
+            active={pathname === "/skills"}
+          />
+          <ul className="space-y-px">
+            {skills.length === 0 ? (
+              <li className="px-2 py-1 text-[11px] text-muted-foreground">
+                No skills yet.
+              </li>
+            ) : (
+              skills.slice(0, 5).map((sk) => {
+                const href = `/skills/${sk.id}`;
+                const active = pathname === href;
+                return (
+                  <li key={sk.id}>
+                    <Link
+                      href={href}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex h-8 items-center gap-2 rounded-md px-2 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        active
+                          ? "bg-sidebar-accent font-medium text-foreground"
+                          : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
+                      )}
+                      title={sk.name}
+                    >
+                      <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">{sk.name}</span>
+                    </Link>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        </div>
       </nav>
 
       {/* Sticky footer */}
