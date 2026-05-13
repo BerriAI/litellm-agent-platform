@@ -2,24 +2,46 @@
  * POST /api/v1/managed_agents/agents/{agent_id}/skill
  *
  * Attach a skill to an agent by either referencing an existing skill or
- * providing inline content. Updates agent.prompt to embed the skill after
- * the <!-- skill --> separator.
+ * providing inline content. Updates agent.prompt by appending a per-skill
+ * block delimited by `<!-- skill:<skill_id> -->`. Multiple skills can be
+ * stacked on one agent — each gets its own block, ordered by attach time.
  *
  * Body (one of):
  *   { skill_id: string }
  *     — attach an existing skill from the library by ID
  *
  *   { content: string, name?: string, description?: string, save_to_library?: boolean }
- *     — inline content; optionally saves a new Skill row first
+ *     — inline content. By default (save_to_library !== false) the content
+ *       is also saved to the Skill library so it can be reattached to
+ *       other agents. Pass `save_to_library: false` for an ephemeral
+ *       attachment — no Skill row is written and the marker uses a fresh
+ *       random UUID; the response will not include a `skill` field.
  *
- * DELETE removes the skill block from agent.prompt (keeps base system prompt).
+ * DELETE removes a skill block from agent.prompt.
+ *   - With `?skill_id=<id>`: strip only that block.
+ *   - Without param: strip all skill blocks (legacy "detach all").
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { httpError, toApiAgent, toApiSkill } from "@/server/types";
+import {
+  appendSkillBlock,
+  stripAllSkillBlocks,
+  stripSkillBlock,
+} from "@/server/skill-prompt";
+import { httpError, toApiAgent, toApiSkill, type ApiSkill } from "@/server/types";
 import { wrap } from "@/server/route-helpers";
+
+// Re-export the prompt helpers from their canonical home for any
+// callers that imported them from this route file historically.
+export {
+  appendSkillBlock,
+  parseAttachedSkillIds,
+  stripAllSkillBlocks,
+  stripSkillBlock,
+} from "@/server/skill-prompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,11 +62,6 @@ const AttachSkillBody = z.union([
   }),
 ]);
 
-function embedSkill(basePrompt: string | null | undefined, skillContent: string): string {
-  const base = (basePrompt ?? "").split(/\n<!-- skill -->\n/)[0].trimEnd();
-  return base ? `${base}\n<!-- skill -->\n${skillContent.trim()}` : skillContent.trim();
-}
-
 export const POST = wrap<RouteContext>(async (req, ctx) => {
   const { user_id } = assertAuth(req);
   const { agent_id } = await ctx.params;
@@ -54,32 +71,47 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
 
   const body = AttachSkillBody.parse(await req.json());
 
+  let skillId: string;
   let skillContent: string;
-  let savedSkill = null;
+  let savedSkill: ApiSkill | undefined;
 
   if ("skill_id" in body) {
     const skill = await prisma.skill.findUnique({ where: { skill_id: body.skill_id } });
     if (skill === null || skill.created_by !== user_id) httpError(404, `skill '${body.skill_id}' not found`);
+    skillId = skill.skill_id;
     skillContent = skill.content;
     savedSkill = toApiSkill(skill);
   } else {
-    skillContent = body.content;
-    if (body.save_to_library && body.name?.trim()) {
+    // Inline content. Default behavior: persist the skill to the library
+    // so it can be reattached to other agents. Callers can opt out with
+    // `save_to_library: false` for an ephemeral marker — the id only
+    // exists on this agent's prompt and can't be looked up later.
+    const saveToLibrary = body.save_to_library !== false;
+    if (saveToLibrary) {
+      const name = body.name?.trim() || `Skill ${new Date().toISOString().slice(0, 19)}`;
       const row = await prisma.skill.create({
         data: {
-          name: body.name.trim(),
+          name,
           description: body.description?.trim() ?? null,
           content: body.content,
           created_by: user_id,
         },
       });
+      skillId = row.skill_id;
+      skillContent = row.content;
       savedSkill = toApiSkill(row);
+    } else {
+      // Ephemeral: no Skill row written. The id only exists in the
+      // prompt marker; the skill can't be reattached to other agents
+      // from the library.
+      skillId = randomUUID();
+      skillContent = body.content;
     }
   }
 
   const updated = await prisma.agent.update({
     where: { agent_id },
-    data: { prompt: embedSkill(agent.prompt, skillContent) },
+    data: { prompt: appendSkillBlock(agent.prompt, skillId, skillContent) },
   });
 
   return Response.json({
@@ -95,10 +127,16 @@ export const DELETE = wrap<RouteContext>(async (req, ctx) => {
   const agent = await prisma.agent.findUnique({ where: { agent_id } });
   if (agent === null || agent.created_by !== user_id) httpError(404, `agent '${agent_id}' not found`);
 
-  const basePrompt = (agent.prompt ?? "").split(/\n<!-- skill -->\n/)[0].trimEnd();
+  const url = new URL(req.url);
+  const skillId = url.searchParams.get("skill_id");
+
+  const nextPrompt = skillId
+    ? stripSkillBlock(agent.prompt, skillId)
+    : stripAllSkillBlocks(agent.prompt);
+
   const updated = await prisma.agent.update({
     where: { agent_id },
-    data: { prompt: basePrompt || null },
+    data: { prompt: nextPrompt || null },
   });
 
   return Response.json({ agent: toApiAgent(updated) });

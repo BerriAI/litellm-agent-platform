@@ -15,6 +15,7 @@
 import type { Agent, Memory, Session, WarmTask } from "@prisma/client";
 import { z } from "zod";
 import { decrypt, encrypt } from "@/server/integrations/core/crypto";
+import { parseAttachedSkillIds } from "@/server/skill-prompt";
 
 // ============================================================================
 // DB row types (re-export from Prisma, do not redefine)
@@ -243,6 +244,12 @@ export interface ApiAgent {
   pfp_url: string | null;
   mcp_servers: string[];
   env_vars: Record<string, string>;
+  /**
+   * IDs of skills currently attached to this agent, in attach order.
+   * Parsed from `<!-- skill:<id> -->` markers in `prompt`. Empty array
+   * when the agent has no skills (or only the legacy anonymous marker).
+   */
+  attached_skill_ids: string[];
   created_at: string;
 }
 
@@ -608,6 +615,7 @@ export function toApiAgent(row: AgentRow): ApiAgent {
         )
       : [],
     env_vars: decryptEnvVars(rawEnvVars),
+    attached_skill_ids: parseAttachedSkillIds(row.prompt),
     created_at: row.created_at.toISOString(),
   };
 }

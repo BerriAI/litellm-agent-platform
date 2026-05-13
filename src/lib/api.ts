@@ -151,6 +151,12 @@ export interface AgentRow {
   pfp_url?: string | null;
   mcp_servers?: string[];
   env_vars?: Record<string, string>;
+  /**
+   * IDs of skills currently attached to this agent, in attach order.
+   * Parsed server-side from `<!-- skill:<id> -->` markers in `prompt`.
+   * Empty array when the agent has no skills.
+   */
+  attached_skill_ids?: string[];
   created_at?: string | null;
   session_count?: number;
   has_active_session?: boolean;
@@ -1050,10 +1056,26 @@ export function attachSkillToAgent(
   );
 }
 
+/**
+ * Detach ALL skills from the agent (legacy behavior). Strips every
+ * `<!-- skill:<id> -->` block plus the legacy anonymous `<!-- skill -->`
+ * block from the prompt.
+ */
 export function detachSkillFromAgent(agentId: string): Promise<{ agent: AgentRow }> {
   return api<{ agent: AgentRow }>(
     "DELETE",
     `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/skill`,
+  );
+}
+
+/** Detach a single skill by id from the agent. */
+export function detachSkillById(
+  agentId: string,
+  skillId: string,
+): Promise<{ agent: AgentRow }> {
+  return api<{ agent: AgentRow }>(
+    "DELETE",
+    `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/skill?skill_id=${encodeURIComponent(skillId)}`,
   );
 }
 

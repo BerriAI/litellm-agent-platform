@@ -15,8 +15,9 @@ import {
   SessionRow,
   SkillRow,
   attachSkillToAgent,
-  detachSkillFromAgent,
+  detachSkillById,
   getAgent,
+  getSkill,
   listSkills,
   listSessions,
   spawnSession,
@@ -79,6 +80,9 @@ export default function AgentDetailPage({ params }: PageProps) {
   const [skillSaving, setSkillSaving] = useState(false);
   const [skillSaveToLibrary, setSkillSaveToLibrary] = useState(true);
   const [existingSkills, setExistingSkills] = useState<SkillRow[]>([]);
+  // Cache of attached skill rows keyed by skill_id, used to render the chip
+  // list with the skill's name (not just its id). Populated lazily.
+  const [attachedSkills, setAttachedSkills] = useState<Record<string, SkillRow>>({});
   // Write form
   const [skillWriteName, setSkillWriteName] = useState("");
   const [skillWriteDesc, setSkillWriteDesc] = useState("");
@@ -102,6 +106,37 @@ export default function AgentDetailPage({ params }: PageProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Fetch SkillRow for each attached skill_id we haven't resolved yet.
+  // Backend doesn't have a batch endpoint, so we fan out — fine for the
+  // small N (a handful of skills per agent) this is realistically used for.
+  useEffect(() => {
+    const ids = agent?.attached_skill_ids ?? [];
+    const missing = ids.filter((sid) => !attachedSkills[sid]);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const fetched = await Promise.all(
+        missing.map((sid) =>
+          getSkill(sid).then(
+            (sk) => [sid, sk] as const,
+            () => [sid, null] as const,
+          ),
+        ),
+      );
+      if (cancelled) return;
+      setAttachedSkills((prev) => {
+        const next = { ...prev };
+        for (const [sid, sk] of fetched) {
+          if (sk) next[sid] = sk;
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agent?.attached_skill_ids, attachedSkills]);
 
   async function handlePfpChange(next: string | null) {
     if (!agent) return;
@@ -219,11 +254,11 @@ export default function AgentDetailPage({ params }: PageProps) {
     }
   }
 
-  async function handleDetachSkill() {
+  async function handleDetachSkillById(skillId: string) {
     if (!agent) return;
     setError(null);
     try {
-      const result = await detachSkillFromAgent(agent.id);
+      const result = await detachSkillById(agent.id, skillId);
       setAgent(result.agent);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
@@ -325,7 +360,7 @@ export default function AgentDetailPage({ params }: PageProps) {
                 onClick={() => void openSkillModal()}
               >
                 <FileText className="size-4" />
-                {agent.prompt?.includes("<!-- skill -->") ? "Change skill" : "Add skill"}
+                Attach skill
               </Button>
               <Button
                 size="lg"
@@ -412,39 +447,56 @@ export default function AgentDetailPage({ params }: PageProps) {
                 )}
               </dd>
 
-              {/* System prompt + skill — split on the --- separator injected by selectTemplate */}
+              {/* System prompt + attached skills. The base prompt is everything
+                  before the first skill marker (legacy anonymous or per-id);
+                  attached skills are rendered as chips with × to detach. */}
               {agent.prompt?.trim() ? (() => {
-                const parts = agent.prompt.split(/\n<!-- skill -->\n/);
-                const systemPrompt = parts[0]?.trim();
-                const skill = parts[1]?.trim();
+                const systemPrompt = agent.prompt
+                  .split(/\n<!-- skill(?::[^\s>]+)? -->\n/)[0]
+                  ?.trim();
+                const attachedIds = agent.attached_skill_ids ?? [];
                 return (
                   <>
-                    <dt className="text-muted-foreground">System prompt</dt>
-                    <dd>
-                      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
-                        {systemPrompt}
-                      </pre>
-                    </dd>
-                    {skill ? (
+                    {systemPrompt ? (
+                      <>
+                        <dt className="text-muted-foreground">System prompt</dt>
+                        <dd>
+                          <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
+                            {systemPrompt}
+                          </pre>
+                        </dd>
+                      </>
+                    ) : null}
+                    {attachedIds.length > 0 ? (
                       <>
                         <dt className="text-muted-foreground">
-                          <div className="flex items-center gap-2">
-                            <span>Skill</span>
-                            <button
-                              type="button"
-                              onClick={() => void handleDetachSkill()}
-                              className="inline-flex items-center gap-0.5 rounded text-[10px] text-muted-foreground/60 hover:text-destructive focus-visible:outline-none"
-                              title="Remove skill from agent"
-                            >
-                              <X className="size-2.5" />
-                              detach
-                            </button>
-                          </div>
+                          {attachedIds.length === 1 ? "Skill" : "Skills"}
                         </dt>
                         <dd>
-                          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
-                            {skill}
-                          </pre>
+                          <div className="flex flex-wrap gap-1.5">
+                            {attachedIds.map((sid) => {
+                              const sk = attachedSkills[sid];
+                              const label = sk?.name ?? `${sid.slice(0, 8)}… (loading)`;
+                              return (
+                                <span
+                                  key={sid}
+                                  className="inline-flex items-center gap-1 rounded-full border bg-muted/40 py-0.5 pl-2.5 pr-1 text-[12px]"
+                                >
+                                  <FileText className="size-3 text-muted-foreground" />
+                                  <span className="max-w-[200px] truncate">{label}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDetachSkillById(sid)}
+                                    className="ml-0.5 grid size-4 place-items-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none"
+                                    title={`Detach ${sk?.name ?? "skill"}`}
+                                    aria-label={`Detach ${sk?.name ?? "skill"}`}
+                                  >
+                                    <X className="size-3" />
+                                  </button>
+                                </span>
+                              );
+                            })}
+                          </div>
                         </dd>
                       </>
                     ) : null}
