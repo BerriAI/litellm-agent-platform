@@ -52,24 +52,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /work \
     && chown sandbox:sandbox /work
 
-# lap-vault CA — baked into the image's system trust store so every binary
+# vault CA — baked into the image's system trust store so every binary
 # (including the bundled `claude` native binary, which ignores
 # NODE_EXTRA_CA_CERTS) trusts the sidecar's MITM cert from boot. The
-# matching private key lives only in the K8s `lap-vault-ca` secret,
-# mounted into the lap-vault sidecar container at runtime.
+# matching private key lives only in the K8s `vault-ca` secret,
+# mounted into the vault sidecar container at runtime.
 #
 # Cover all three trust paths clients in this image actually use:
 #   - OpenSSL bundle file (`/etc/ssl/certs/ca-certificates.crt`) — curl, python
 #   - OpenSSL hash-symlink directory (`/etc/ssl/certs/<hash>.0`) — git's
 #     libcurl-gnutls walks this dir, NOT the bundle file
 #   - Per-cert PEM in /etc/ssl/certs (via update-ca-certificates symlink)
-COPY harnesses/lap-vault/ca.crt /etc/ssl/certs/lap-vault.crt
-RUN ln -sf /etc/ssl/certs/lap-vault.crt /usr/local/share/ca-certificates/lap-vault.crt \
+COPY harnesses/vault/ca.crt /etc/ssl/certs/vault.crt
+RUN ln -sf /etc/ssl/certs/vault.crt /usr/local/share/ca-certificates/vault.crt \
     && update-ca-certificates \
-    && cat /etc/ssl/certs/lap-vault.crt >> /etc/ssl/certs/ca-certificates.crt \
+    && cat /etc/ssl/certs/vault.crt >> /etc/ssl/certs/ca-certificates.crt \
     && openssl rehash /etc/ssl/certs/ \
     && awk '/BEGIN CERTIFICATE/{c++} END{print c " certs in bundle"}' /etc/ssl/certs/ca-certificates.crt \
-    && ls /etc/ssl/certs/ | grep -i lap
+    && ls /etc/ssl/certs/ | grep -i vault
 
 # gitleaks — secret scanner used by security agent templates.
 # Uses Go-style arch names (x64/arm64), not dpkg names (amd64/arm64).
