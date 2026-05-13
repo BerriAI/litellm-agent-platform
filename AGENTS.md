@@ -97,7 +97,7 @@ These edits live inside the `agent-sbx-control-plane` container's filesystem, so
 
 Two issues, both surface as `session create failed` during `creating_sandbox`.
 
-**a) Mount target unreachable by the container user.** The web container runs as `nextjs` (uid 1001), but the compose volume mounts the host kubeconfig at `/root/.kube/config`. Failure: `EACCES: permission denied, open '/root/.kube/config'`. Fix by mounting to a path readable by uid 1001 and overriding `KUBECONFIG` accordingly, e.g.:
+**a) Mount target unreachable by the container user.** The web/worker containers run as `nextjs` (uid 1001), but the compose volume mounts the host kubeconfig at `/root/.kube/config`. Failure: `EACCES: permission denied, open '/root/.kube/config'`. Fix by mounting to a path readable by uid 1001 and overriding `KUBECONFIG` accordingly, e.g.:
 
 ```yaml
 environment:
@@ -116,7 +116,7 @@ KUBECONFIG=~/.kube/config kubectl config view --raw --minify \
 chmod 644 .local/kube/config
 ```
 
-The k8s clients in `src/server/k8s.ts` are cached on first request — restart `web` (`docker compose restart web`) after rewriting the kubeconfig file or the stale config keeps loading.
+The k8s clients in `src/server/k8s.ts` are cached on first request — restart `web` and `worker` (`docker compose restart web worker`) after rewriting the kubeconfig file or the stale config keeps loading.
 
 ## 4. Postgres host-port collision
 

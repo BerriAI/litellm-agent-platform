@@ -227,42 +227,24 @@ async function sessionEventTick(): Promise<void> {
   }
 }
 
-/**
- * Boot the reconciler + warm-pool + SessionEvent subscriber loops.
- *
- * Called either from the standalone CLI entry below (local-dev only) or
- * from `src/instrumentation.ts` when the worker is collapsed into the
- * Next.js process. Safe to call exactly once per process — the loops
- * never exit on their own.
- */
-export async function startWorker(): Promise<void> {
-  // Local-mode short-circuit: when LAP_LOCAL_SANDBOX_URL is set the platform
-  // isn't talking to k8s/ECS, so the reconciler + warm-pool ticks would only
-  // produce errors (or, worse, fight a separately-running production worker).
-  // Skip both. The SessionEvent subscriber still runs — it's what lets the
-  // UI see harness output in local-dev.
-  const localMode = env.LAP_LOCAL_SANDBOX_URL.length > 0;
-  if (!localMode) {
-    setInterval(tick, intervalMs);
-    tick();
-  }
-  setInterval(sessionEventTick, SESSION_EVENT_SCAN_INTERVAL_MS);
-  sessionEventTick();
-  console.log(
-    localMode
-      ? `worker started in local mode (sandbox=${env.LAP_LOCAL_SANDBOX_URL}, ` +
-          `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS}; ` +
-          `reconcile + warm-pool ticks disabled)`
-      : `reconciler worker started (interval=${intervalMs}ms, ` +
-          `warm_pool_size=${env.WARM_POOL_SIZE}, ` +
-          `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS})`,
-  );
+// Local-mode short-circuit: when LAP_LOCAL_SANDBOX_URL is set the platform
+// isn't talking to k8s/ECS, so the reconciler + warm-pool ticks would only
+// produce errors (or, worse, fight a separately-running production worker).
+// Skip both. The SessionEvent subscriber still runs — it's what lets the
+// UI see harness output in local-dev.
+const localMode = env.LAP_LOCAL_SANDBOX_URL.length > 0;
+if (!localMode) {
+  setInterval(tick, intervalMs);
+  tick();
 }
-
-// CLI entry path: keeps `npx tsx src/worker/index.ts` working for local
-// dev convenience. In production the worker is started by
-// `src/instrumentation.ts` inside the Next.js process — see that file
-// and the PR that introduced this refactor.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  void startWorker();
-}
+setInterval(sessionEventTick, SESSION_EVENT_SCAN_INTERVAL_MS);
+sessionEventTick();
+console.log(
+  localMode
+    ? `worker started in local mode (sandbox=${env.LAP_LOCAL_SANDBOX_URL}, ` +
+        `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS}; ` +
+        `reconcile + warm-pool ticks disabled)`
+    : `reconciler worker started (interval=${intervalMs}ms, ` +
+        `warm_pool_size=${env.WARM_POOL_SIZE}, ` +
+        `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS})`,
+);

@@ -35,7 +35,7 @@ Per-session resources:
 
 ## URL exposure
 
-The web service (which also hosts the reconciler / warm-pool / SessionEvent subscriber loops via `src/instrumentation.ts`) needs a host-reachable URL per pod. Pod IPs (`10.244.x`) live inside the CNI overlay and aren't routable from the host or from the docker-compose network. We expose each sandbox via a NodePort Service:
+Web/worker need a host-reachable URL per pod. Pod IPs (`10.244.x`) live inside the CNI overlay and aren't routable from the host or from the docker-compose network. We expose each sandbox via a NodePort Service:
 
 - `bin/kind-up.sh` opens host port mappings for `K8S_NODEPORT_MIN .. MAX` on the kind node (default `30000-30099`).
 - Same range is pinned in the kube-apiserver via `--service-node-port-range` so k8s only allocates inside the window.
@@ -79,7 +79,7 @@ kind delete cluster --name agent-sbx
 
 ## docker-compose integration
 
-`docker-compose.yml` mounts `~/.kube` read-only into the web container and adds `host.docker.internal` to `extra_hosts` (Docker Desktop adds this automatically; Linux compose needs the alias). `KUBECONFIG=/root/.kube/config` inside the container points at the mounted kubeconfig.
+`docker-compose.yml` mounts `~/.kube` read-only into web/worker and adds `host.docker.internal` to `extra_hosts` (Docker Desktop adds this automatically; Linux compose needs the alias). `KUBECONFIG=/root/.kube/config` inside the container points at the mounted kubeconfig.
 
 When the kubeconfig server URL is unreachable from the container (kind writes `127.0.0.1` which inside compose loops back to the container itself), `K8S_API_SERVER` overrides the cluster server URL in-process via `KubeConfig.loadFromOptions`. Cert validation against the override URL is **only** disabled when `K8S_SKIP_TLS_VERIFY=true` is also set — required for kind because the apiserver cert SAN won't cover an arbitrary override hostname. **Never set `K8S_SKIP_TLS_VERIFY=true` against a prod cluster.**
 

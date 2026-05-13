@@ -2,9 +2,9 @@
 
 # ---------- 0. aws-iam-authenticator ----------
 # Standalone download + checksum-verify stage so the binary layer is cached
-# independent of node_modules. The runner stage COPYs from this stage.
-# Sandboxes auth to EKS via an exec-plugin kubeconfig that spawns this
-# binary on every request, so it has to be on PATH at runtime.
+# independent of node_modules. The runner + worker stages both COPY from
+# this stage. Sandboxes auth to EKS via an exec-plugin kubeconfig that
+# spawns this binary on every request, so it has to be on PATH at runtime.
 FROM alpine:3.20 AS aws-iam-authenticator
 RUN apk add --no-cache bash curl ca-certificates coreutils
 COPY bin/install-aws-iam-authenticator.sh /tmp/install-aws-iam-authenticator.sh
@@ -57,7 +57,7 @@ RUN --mount=type=cache,target=/root/.npm \
 
 # ---------- 3. prisma migrate (compose init container) ----------
 # `docker-compose.yml`'s db-migrate service builds this stage and runs it once
-# at startup against the postgres service before the web container comes up.
+# at startup against the postgres service before web + worker come up.
 FROM node:20-alpine AS prisma
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -65,11 +65,23 @@ COPY package.json package-lock.json ./
 COPY prisma ./prisma
 CMD ["npx", "prisma", "db", "push", "--accept-data-loss", "--skip-generate"]
 
-# ---------- 4. run (web + worker, single process — default target) ----------
-# Last stage = default `docker build` target. The worker loops run inside
-# this Next.js process via `src/instrumentation.ts` — no separate
-# container needed. See render.yaml and the PR that collapsed
-# `litellm-agents-worker` into the web service.
+# ---------- 4. worker (reconciler) ----------
+# Reuses `builder` (full node_modules, full source) so `tsx` and the
+# generated Prisma client are available at runtime.
+FROM node:20-alpine AS worker
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=aws-iam-authenticator /usr/local/bin/aws-iam-authenticator /usr/local/bin/aws-iam-authenticator
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json /app/package-lock.json /app/tsconfig.json ./
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/src/server ./src/server
+COPY --from=builder /app/src/worker ./src/worker
+CMD ["npx", "tsx", "src/worker/index.ts"]
+
+# ---------- 5. run (web — default target) ----------
+# Last stage = default `docker build` target = web service.
 FROM node:20-alpine AS runner
 WORKDIR /app
 

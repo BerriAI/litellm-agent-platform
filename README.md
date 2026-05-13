@@ -22,7 +22,7 @@ bin/kind-up.sh
 docker compose up
 ```
 
-`bin/kind-up.sh` is idempotent — provisions a kind cluster `agent-sbx`, installs the agent-sandbox controller, and loads the harness image. `docker compose up` boots Postgres, runs the schema migration, and starts the web container (`:3000`) — the reconciler / warm-pool / SessionEvent subscriber loops run inside the Next.js process via `src/instrumentation.ts`.
+`bin/kind-up.sh` is idempotent — provisions a kind cluster `agent-sbx`, installs the agent-sandbox controller, and loads the harness image. `docker compose up` boots Postgres, runs the schema migration, and starts web (`:3000`) + worker.
 
 Architecture and tuning: [docs/k8s-backend.md](docs/k8s-backend.md).
 
@@ -36,10 +36,9 @@ CONTAINER_ENV_GITHUB_TOKEN=ghp_...   # container sees GITHUB_TOKEN=ghp_...
 
 ### Deploying
 
-Recommended path: AWS EKS for the sandbox cluster, Render for the
-single web service (worker loops run inside the Next.js process). See
-[`deploy/`](deploy/) — `bin/eks-up.sh` provisions the cluster, the
-Render Blueprint at the top of
+Recommended path: AWS EKS for the sandbox cluster, Render for web +
+worker. See [`deploy/`](deploy/) — `bin/eks-up.sh` provisions the
+cluster, the Render Blueprint at the top of
 [`deploy/render/README.md`](deploy/render/README.md) is one click.
 
 ## Architecture

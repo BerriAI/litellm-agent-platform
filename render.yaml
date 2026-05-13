@@ -3,9 +3,8 @@
 #
 # What this provisions:
 #   - postgres        managed Postgres
-#   - web             web service, this repo (also runs the reconciler /
-#                     warm-pool / SessionEvent subscriber loops inside the
-#                     Next.js process via src/instrumentation.ts)
+#   - web             web service, this repo
+#   - worker          background worker, this repo
 #
 # You bring:
 #   - LITELLM_API_BASE, LITELLM_API_KEY  (any OpenAI-compatible
@@ -86,6 +85,70 @@ services:
       # Platform discovers any Ready node ExternalIP via the apiserver
       # at spawn time (30s cache) when set to "auto". Pinning a single
       # node IP breaks every nodegroup scale or node replacement.
+      - key: K8S_NODE_HOST
+        value: auto
+      - key: K8S_HARNESS_IMAGE
+        sync: false
+      - key: K8S_NAMESPACE
+        value: default
+      - key: K8S_NODEPORT_MIN
+        value: "30000"
+      - key: K8S_NODEPORT_MAX
+        value: "30099"
+      - key: K8S_IMAGE_PULL_POLICY
+        value: IfNotPresent
+      - key: WARM_POOL_SIZE
+        value: "2"
+
+  - type: worker
+    name: litellm-agents-worker
+    runtime: node
+    plan: starter
+    # `--include=dev` mirrors the web service — tsx (devDep) is needed
+    # at runtime by `npm run worker`. `install-aws-iam-authenticator.sh`
+    # drops the EKS exec-plugin binary at ./bin/aws-iam-authenticator;
+    # the startCommand below prepends ./bin to PATH.
+    buildCommand: bash bin/install-aws-iam-authenticator.sh && npm ci --include=dev && npx prisma generate
+    startCommand: |
+      set -e
+      export PATH="$PWD/bin:$PATH"
+      if [ -n "$KUBE_CONFIG_B64" ]; then
+        echo "$KUBE_CONFIG_B64" | base64 -d > /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+      fi
+      npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: litellm-agents-postgres
+          property: connectionString
+      - key: MASTER_KEY
+        fromService:
+          type: web
+          name: litellm-agents-web
+          envVarKey: MASTER_KEY
+      - key: UI_USERNAME
+        value: admin
+      - key: LITELLM_API_BASE
+        sync: false
+      - key: LITELLM_API_KEY
+        sync: false
+      - key: LITELLM_DEFAULT_MODEL
+        value: anthropic/claude-sonnet-4-6
+      - key: PREINSTALLED_GITHUB_REPO
+        value: https://github.com/BerriAI/litellm
+      # See web service comment — kubeconfig uses aws-iam-authenticator at
+      # request time, so AWS_* are mandatory for the exec-plugin to auth.
+      - key: KUBE_CONFIG_B64
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
       - key: K8S_NODE_HOST
         value: auto
       - key: K8S_HARNESS_IMAGE

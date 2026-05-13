@@ -40,11 +40,11 @@ Render API.
 4. **Generate `MASTER_KEY`**: `openssl rand -hex 16`. Save once, set on
    both services.
 5. **Create web service** (`POST /v1/services`). See body shape below.
-   The reconciler / warm-pool / SessionEvent loops run inside this
-   process via `src/instrumentation.ts`; no separate worker service.
-6. **Poll `/v1/services/<id>/deploys?limit=1`** until `status: live` or
+6. **Create worker service** (`POST /v1/services`). Same envs, different
+   `type` and start command.
+7. **Poll `/v1/services/<id>/deploys?limit=1`** until `status: live` or
    `*failed*`. Build phase ~3-5 min on starter plan.
-7. **Smoke**: `GET https://<service-url>/login` → expect 200.
+8. **Smoke**: `GET https://<service-url>/login` → expect 200.
 
 ## Service body shape (POST /v1/services)
 
@@ -70,11 +70,15 @@ Render API.
 }
 ```
 
+Worker variant: `"type": "background_worker"`, no `healthCheckPath`,
+build = `bash bin/install-aws-iam-authenticator.sh && npm ci --include=dev && npx prisma generate`,
+start = `export PATH="$PWD/bin:$PATH" && npm run worker`.
+
 `bin/install-aws-iam-authenticator.sh` drops the EKS exec-plugin binary
 at `./bin/aws-iam-authenticator`; the startCommand prepends `./bin` to
 `PATH` so the kubeconfig's `exec:` block can find it.
 
-## Env vars (web service)
+## Env vars (set on BOTH services, identical)
 
 ```
 NODE_ENV=production
@@ -132,17 +136,16 @@ WARM_POOL_SIZE=2
 
 ## Verification checklist
 
-After the web service reports `live`:
+After both services report `live`:
 
 - [ ] `curl https://<web-url>/login` → 200
-- [ ] Web service logs (`GET /v1/services/<id>/logs?limit=50`) contain
-      `reconciler worker started` — the loops boot inside the Next.js
-      process via `src/instrumentation.ts`
+- [ ] Worker logs (`GET /v1/services/<id>/logs?limit=50`) contain
+      `reconciler worker started`
 - [ ] Login with `MASTER_KEY`, create an agent, click "Spawn session"
 - [ ] Watch web logs for the spawn round-trip; first cold spawn ~30-60s
       due to image pull from the registry
 - [ ] On second click, spawn should land in <2s (warm pool kicks in
-      after the first reconcile tick has provisioned)
+      after the first worker tick has provisioned)
 
 ## Failure modes and their fixes
 

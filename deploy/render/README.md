@@ -8,20 +8,14 @@ One click. Render reads [`render.yaml`](../../render.yaml) and creates:
 |------------------|-----------------------------|
 | Postgres         | Render managed Postgres     |
 | `litellm-agents-web`    | Render Web Service   |
-
-The reconciler / warm-pool / SessionEvent subscriber loops that used to
-live in a separate `litellm-agents-worker` Render Background Worker now
-run inside the Next.js process via `src/instrumentation.ts` — one
-service, one deploy unit. If you're upgrading from an older deploy,
-delete the `litellm-agents-worker` service manually on the Render
-dashboard; the blueprint no longer provisions it.
+| `litellm-agents-worker` | Render Background Worker |
 
 `MASTER_KEY` is auto-generated. `DATABASE_URL` is wired automatically.
 
 ## You provide
 
-After Render finishes provisioning, fill these on the web service
-dashboard (`Environment` tab — or use Render env groups):
+After Render finishes provisioning, fill these on the dashboard
+(`Environment` tab, both web + worker — or use Render env groups):
 
 | Var                  | Source                                                      |
 |----------------------|-------------------------------------------------------------|
@@ -66,8 +60,8 @@ knowing about before you start.
   from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` on each request.
   The binary itself is installed by
   [`bin/install-aws-iam-authenticator.sh`](../../bin/install-aws-iam-authenticator.sh),
-  invoked from the Dockerfile and `render.yaml`'s `buildCommand`. If you
-  fork either, keep that step.
+  invoked from both the Dockerfile (web) and `render.yaml`'s
+  `buildCommand` (worker). If you fork either, keep that step.
 - **First deploy will fail until you fill the `sync: false` vars.** That's
   expected — Render kicks off a build immediately, redeploy after pasting.
 - **`npm ci` under `NODE_ENV=production` skips devDependencies.** The

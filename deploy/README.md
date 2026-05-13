@@ -1,11 +1,7 @@
 # Deploy
 
-**Recommended path: AWS EKS for the sandbox cluster, Render for the
-single web service.** The codebase ships scripts and a Render Blueprint
-for exactly this combo. The reconciler / warm-pool / SessionEvent
-subscriber loops that used to live in a separate `litellm-agents-worker`
-Render service now run inside the Next.js process via
-`src/instrumentation.ts` — one container, one deploy unit.
+**Recommended path: AWS EKS for the sandbox cluster, Render for web + worker.**
+The codebase ships scripts and a Render Blueprint for exactly this combo.
 
 ## Architecture
 
@@ -13,14 +9,15 @@ Render service now run inside the Next.js process via
 ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────────┐
 │   web    │──▶│ postgres │   │ litellm prox │──▶│  model API   │
 │ (Render) │   │ (Render  │   │   (yours)    │   │              │
-│ + worker │   │  or Neon)│   └──────▲───────┘   └──────────────┘
-│  loops   │   └──────────┘          │
-└────┬─────┘                         │
-     │           ┌──────────────────┐│
-     └── kube ──▶│    AWS EKS       ││
-        API      │ + agent-sandbox  ││
-                 │      CRD         ││
-                 └──────────────────┘
+└────┬─────┘   │  or Neon)│   └──────▲───────┘   └──────────────┘
+     │         └──────────┘          │
+     │              ▲                │
+┌────▼─────┐        │         ┌──────┴───────┐
+│  worker  │────────┘         │   AWS EKS    │
+│ (Render) │─── kube API ────▶│  + agent-    │
+└──────────┘                  │   sandbox    │
+                              │   CRD        │
+                              └──────────────┘
 ```
 
 ## Steps
@@ -32,7 +29,7 @@ Render service now run inside the Next.js process via
    AWS_REGION=us-east-1 \
      bin/eks-up.sh > kube-config.b64
    ```
-   Set `K8S_NODE_HOST=auto` on the web service (recommended). Platform
+   Set `K8S_NODE_HOST=auto` on web/worker (recommended). Platform
    discovers a Ready node ExternalIP via the apiserver at spawn time
    and caches for 30s — survives nodegroup scales and node replacements.
    The script prints a sample IP for sanity-checking only.
@@ -41,9 +38,10 @@ Render service now run inside the Next.js process via
    exec-plugin block — it carries no bearer token and never expires. The
    binary is downloaded into the build artifact by both the Dockerfile
    and `render.yaml`'s `buildCommand`. The same AWS credentials you used
-   to run the script must also be set on the Render service as
-   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`, because
-   the exec-plugin reads them from the process env at every k8s API call.
+   to run the script must also be set on the Render services (web +
+   worker) as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+   `AWS_REGION`, because the exec-plugin reads them from the process env
+   at every k8s API call.
 
 2. **Push the harness image** to ECR (or any registry your cluster nodes
    can pull from):
@@ -62,16 +60,16 @@ Render service now run inside the Next.js process via
    - `K8S_HARNESS_IMAGE=$ECR/opencode-sandbox:latest`
    - `LITELLM_API_BASE`, `LITELLM_API_KEY`, `LITELLM_DEFAULT_MODEL`
 
-That's it. The first reconcile tick (running inside the web service)
-fills the warm pool; spawns land in <2s once primed.
+That's it. Worker's first reconcile tick fills the warm pool; spawns
+land in <2s once primed.
 
 For a scripted / agent-driven deploy, see
 [`render/AGENTS.md`](render/AGENTS.md).
 
 ## Required env
 
-Set on the `web` service. The 1-click flow handles auto-generated
-values; everything else is paste-once.
+Set on both `web` and `worker` services. The 1-click flow handles
+auto-generated values; everything else is paste-once.
 
 ```ini
 DATABASE_URL=                     # Render-provisioned, or your Neon
@@ -103,8 +101,8 @@ WARM_POOL_SIZE=2
 
 - **MASTER_KEY** rotates by setting a new value in Render dashboard.
 - **AWS access keys** rotate like any IAM credential — drop the new pair
-  into `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` on the Render web
-  service. No kubeconfig regeneration needed; the exec-plugin re-reads
+  into `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` on both Render
+  services. No kubeconfig regeneration needed; the exec-plugin re-reads
   env on the next call. (If you switch to a new IAM principal entirely,
   re-run `bin/eks-up.sh` once so the new principal is mapped in the
   cluster's `aws-auth` ConfigMap.)

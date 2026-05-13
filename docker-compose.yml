@@ -32,10 +32,10 @@ services:
   web:
     build:
       context: .
-      # The runner stage runs the Next.js standalone server. The
-      # reconciler / warm-pool / SessionEvent subscriber loops also run
-      # inside this process via src/instrumentation.ts — no separate
-      # worker container needed.
+      # Buildkit defaults to the last stage of a multi-stage Dockerfile.
+      # The Dockerfile's last stage is `worker`, so without an explicit
+      # target the web container ends up running the reconciler. Pin to
+      # `runner` (the Next.js standalone server stage).
       target: runner
     ports:
       - "3002:3000"
@@ -59,6 +59,22 @@ services:
       # apiserver is pinned at host.docker.internal:6444 so this works from
       # inside the compose network as long as K8S_API_SERVER overrides the
       # kubeconfig server URL accordingly.
+      - ${HOME}/.kube:/root/.kube:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm_agents
+      KUBECONFIG: /root/.kube/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
       - ${HOME}/.kube:/root/.kube:ro
     depends_on:
       db-migrate:
