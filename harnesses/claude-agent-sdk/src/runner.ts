@@ -7,6 +7,8 @@
 
 import { randomUUID } from "node:crypto";
 
+const newEventId = (): string => randomUUID();
+
 import {
   query,
   type Options,
@@ -110,7 +112,7 @@ export async function runTurn(
   s.abortController = ac;
 
   // Record the user prompt as the first SessionEvent of the turn.
-  emit({ type: "user_message", text: userText });
+  emit({ event_id: newEventId(), type: "user_message", text: userText });
   const userMessage: PlatformMessage = {
     info: {
       id: `user_${randomUUID()}`,
@@ -174,7 +176,7 @@ export async function runTurn(
       const msg = err instanceof Error ? err.message : String(err);
       lastError = { name: "SDKError", data: { message: msg.slice(0, 500) } };
     }
-    emit({ type: "error", message: lastError.data.message });
+    emit({ event_id: newEventId(), type: "error", message: lastError.data.message });
   } finally {
     s.abortController = null;
   }
@@ -203,7 +205,12 @@ export async function runTurn(
   };
   s.history.push(assistant);
 
-  emit({ type: "status", status: "ready", detail: "idle" });
+  emit({
+    event_id: newEventId(),
+    type: "status",
+    status: "ready",
+    detail: "idle",
+  });
 
   return assistant;
 }

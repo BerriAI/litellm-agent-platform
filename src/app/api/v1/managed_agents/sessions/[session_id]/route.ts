@@ -54,7 +54,10 @@ export async function DELETE(req: Request, ctx: RouteContext) {
       return Response.json({ id: row.session_id, status: row.status });
     }
 
-    if (row.task_arn) {
+    // task_arn='local' is the LAP_LOCAL_SANDBOX_URL sentinel — there's no
+    // ECS task to stop. The host-side harness keeps running for other
+    // sessions.
+    if (row.task_arn && row.task_arn !== "local") {
       await stopTask(row.task_arn, "session deleted");
     }
 

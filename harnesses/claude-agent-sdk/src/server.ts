@@ -157,12 +157,26 @@ interface MessageBody {
   parts?: Array<{ type?: string; text?: string }>;
 }
 
+/**
+ * Strip the LiteLLM-style provider prefix when we're routing direct to
+ * api.anthropic.com. The SDK forwards model strings unchanged, so
+ * "anthropic/claude-sonnet-4-5" reaches Anthropic which doesn't know
+ * that prefix → "model doesn't exist". When LiteLLM_API_BASE is unset
+ * (no proxy), normalise the id. When a proxy IS configured, leave it
+ * alone — the proxy uses the prefix for routing.
+ */
+function normalizeModelId(id: string): string {
+  if (process.env.LITELLM_API_BASE) return id;
+  return id.startsWith("anthropic/") ? id.slice("anthropic/".length) : id;
+}
+
 function extractTurnInputs(body: MessageBody): { text: string; modelId: string } {
   const text = (body.parts ?? [])
     .filter((p) => p?.type === "text")
     .map((p) => p?.text ?? "")
     .join("\n");
-  return { text, modelId: body.model?.modelID ?? DEFAULT_MODEL };
+  const raw = body.model?.modelID ?? DEFAULT_MODEL;
+  return { text, modelId: normalizeModelId(raw) };
 }
 
 app.post("/session/:id/message", async (c) => {

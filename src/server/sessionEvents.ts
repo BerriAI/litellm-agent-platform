@@ -32,46 +32,62 @@ function toApi(row: Row): ApiSessionEvent {
   };
 }
 
-// P2002 = Prisma's unique-constraint violation. Under bursty harness output
-// two concurrent appends can both read the same MAX(seq) and race the
-// insert; the loser hits the (session_id, seq) unique index and we retry.
-const APPEND_RETRY_LIMIT = 8;
+// Race on the seq primary key: two concurrent writers can both read the
+// same MAX(seq) and try to insert the same seq. We retry on that, capped.
+const SEQ_RETRY_LIMIT = 8;
 
 /**
- * Append one event to a session's log. Computes the next seq as
- * MAX(seq)+1 and inserts the row. On the rare race where two writers
- * resolve the same seq concurrently, retries up to APPEND_RETRY_LIMIT
- * times. Returns the assigned seq.
+ * Append one event to a session's log. Idempotent: a second/third writer
+ * delivering the same event_id collapses to ONE row via
+ *   INSERT … ON CONFLICT (session_id, event_id) DO NOTHING
+ * Returns the resolved seq — the one that landed, or the existing one if
+ * the row was already there.
+ *
+ * Two unique constraints are in play:
+ *   - (session_id, seq) PK — the ordering, retried on conflict
+ *   - (session_id, event_id) — the dedupe, swallowed silently
  */
 export async function appendSessionEvent(
   session_id: string,
   event: SessionEvent,
 ): Promise<number> {
-  for (let attempt = 0; attempt < APPEND_RETRY_LIMIT; attempt++) {
+  for (let attempt = 0; attempt < SEQ_RETRY_LIMIT; attempt++) {
     const last = await prisma.sessionEvent.findFirst({
       where: { session_id },
       orderBy: { seq: "desc" },
       select: { seq: true },
     });
     const seq = (last?.seq ?? 0) + 1;
-    try {
-      await prisma.sessionEvent.create({
-        data: {
-          session_id,
-          seq,
-          event_type: event.type,
-          payload: event as unknown as object,
-        },
-      });
-      return seq;
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      if (code === "P2002" && attempt < APPEND_RETRY_LIMIT - 1) continue;
-      throw e;
-    }
+    // Raw INSERT … ON CONFLICT lets us treat the (session_id, event_id)
+    // collision as success-with-no-write while still surfacing the seq
+    // collision so we can retry. RETURNING gives the assigned seq when
+    // the insert lands; an empty result means the event_id already
+    // existed, in which case we look up the seq it landed under earlier.
+    const rows = await prisma.$queryRaw<Array<{ seq: number }>>`
+      INSERT INTO "managed_agent_session_event"
+        ("session_id", "seq", "event_type", "payload", "event_id", "ts")
+      VALUES
+        (${session_id}, ${seq}, ${event.type}, ${JSON.stringify(event)}::jsonb,
+         ${event.event_id}, NOW())
+      ON CONFLICT ("session_id", "event_id") DO NOTHING
+      RETURNING "seq"
+    `;
+    if (rows.length > 0) return rows[0].seq;
+
+    // event_id already there → look up the row that landed and return
+    // its seq so callers stay consistent. This is the dedupe success path.
+    const existing = await prisma.sessionEvent.findFirst({
+      where: { session_id, event_id: event.event_id },
+      select: { seq: true },
+    });
+    if (existing) return existing.seq;
+
+    // Neither path returned a row → we lost the seq race (another writer
+    // grabbed our seq with a different event_id). Loop and retry with
+    // MAX(seq)+1 recomputed.
   }
   throw new Error(
-    `appendSessionEvent: gave up after ${APPEND_RETRY_LIMIT} attempts for session ${session_id}`,
+    `appendSessionEvent: gave up after ${SEQ_RETRY_LIMIT} attempts for session ${session_id}`,
   );
 }
 

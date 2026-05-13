@@ -125,6 +125,7 @@ async function dispatchHarnessSend(opts: {
     // long-poll loop observes it instead of hanging forever.
     try {
       await appendSessionEvent(opts.session_id, {
+        event_id: crypto.randomUUID(),
         type: "error",
         message: "harness request failed",
       });
@@ -160,13 +161,18 @@ export async function POST(req: Request, ctx: RouteContext) {
       body.parts as HarnessMessagePart[] | undefined,
     );
 
-    // Persist the user-turn event up front. The returned seq is the cursor
-    // the caller will hand back to GET /events?since=<seq_started> to start
-    // tailing this turn's assistant output.
-    const seq_started = await appendSessionEvent(session_id, {
-      type: "user_message",
-      text: body.text ?? "",
+    // Don't double-write the user_message — the harness's runner.ts emits
+    // it as the first SessionEvent of the turn, which the worker subscriber
+    // persists. Writing it here too caused two user_message rows per send.
+    // Return the current max seq as the cursor so the caller's long-poll
+    // picks up the user_message (and the assistant_text that follows) on
+    // its first /events?since=<seq_started> call.
+    const last = await prisma.sessionEvent.findFirst({
+      where: { session_id },
+      orderBy: { seq: "desc" },
+      select: { seq: true },
     });
+    const seq_started = last?.seq ?? 0;
 
     // Fire-and-forget the actual harness call. The harness emits BusEvents
     // which the worker translates into SessionEvent rows — the caller reads

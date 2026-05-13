@@ -221,11 +221,17 @@ model SessionEvent {
   seq        Int
   event_type String
   payload    Json
+  /// Stable id minted at the harness emit site. The (session_id, event_id)
+  /// unique index makes inserts idempotent — two subscribers writing the
+  /// same SSE frame collide on the index and the loser ON CONFLICT
+  /// DO NOTHING's. Lets dev safely run as many subscribers as you want.
+  event_id   String
   ts         DateTime @default(now())
 
   session    Session  @relation(fields: [session_id], references: [session_id], onDelete: Cascade)
 
   @@id([session_id, seq])
+  @@unique([session_id, event_id])
   @@index([session_id, seq])
   @@map("managed_agent_session_event")
 }

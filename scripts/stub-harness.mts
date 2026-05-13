@@ -7,6 +7,8 @@
  * Usage:
  *   PORT=4100 npx tsx scripts/stub-harness.mts
  */
+import { randomUUID } from "node:crypto";
+
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -15,7 +17,22 @@ import type { SessionEvent } from "@lap/harness-shared/session-event";
 
 const PORT = parseInt(process.env.PORT ?? "4100", 10);
 
-const SCRIPT: SessionEvent[] = [
+// Stamp every scripted event with a fresh UUID each turn so the
+// platform's UNIQUE (session_id, event_id) index doesn't dedupe two
+// "say hi" turns into one row.
+const stamp = (e: Omit<SessionEvent, "event_id">): SessionEvent =>
+  ({ ...e, event_id: randomUUID() } as SessionEvent);
+
+// Template-only — event_id is added at emission time via stamp() so each
+// "say hi" turn lands as a fresh row instead of being deduped by the
+// (session_id, event_id) unique index. Distributive Omit so each
+// variant of the SessionEvent union keeps its own discriminant.
+type SessionEventTemplate = SessionEvent extends infer T
+  ? T extends { event_id: string }
+    ? Omit<T, "event_id">
+    : never
+  : never;
+const SCRIPT: SessionEventTemplate[] = [
   { type: "status", status: "ready" },
   { type: "user_message", text: "hi" },
   {
@@ -84,7 +101,8 @@ app.post("/session/:id/message", async (c) => {
   const body = await c.req.json<{ text?: string }>();
   console.log(`[stub] received message: ${JSON.stringify(body).slice(0, 200)}`);
   setImmediate(async () => {
-    for (const e of SCRIPT) {
+    for (const tpl of SCRIPT) {
+      const e = stamp(tpl);
       for (const cb of subs) cb(e);
       await new Promise((r) => setTimeout(r, 80));
     }

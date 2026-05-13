@@ -38,7 +38,15 @@ import {
 
 const DEAD_STATUSES = new Set(["dead", "failed", "stopped"]);
 
+/**
+ * Sentinel task_arn used by the local-mode bring-up path
+ * (LAP_LOCAL_SANDBOX_URL). These rows have no ECS task to stop and no pod
+ * to reap — skip them in every sweep.
+ */
+const LOCAL_TASK_ARN = "local";
+
 async function safeStopTask(task_arn: string, reason: string): Promise<void> {
+  if (task_arn === LOCAL_TASK_ARN) return;
   try {
     await stopTask(task_arn, reason);
   } catch (e) {

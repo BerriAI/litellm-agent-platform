@@ -35,6 +35,14 @@ const EnvSchema = z.object({
   PREINSTALLED_GITHUB_REPO: z.string().min(1),
   LITELLM_API_BASE: z.string().min(1),
   LITELLM_API_KEY: z.string().min(1),
+  // Local sandbox mode. When set, session-create skips k8s/ECS entirely and
+  // points every new session at this URL — a harness already running on the
+  // host (e.g. `cd harnesses/claude-agent-sdk && PORT=4096 node ...`). The
+  // single harness multiplexes sessions internally (its `sessions` map is
+  // keyed by harness session id). The reconciler skips rows with
+  // `task_arn='local'` so it doesn't try to stop a non-existent ECS task.
+  // Empty (default) → normal k8s/ECS flow.
+  LAP_LOCAL_SANDBOX_URL: z.string().default(""),
   // The harness inside the sandbox uses this to POST/GET memory endpoints
   // on this platform. Empty string disables the memory tools gracefully.
   LAP_BASE_URL: z.string().default(""),

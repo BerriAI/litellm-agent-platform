@@ -29,6 +29,7 @@
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { env } from "@/server/env";
 import {
   runTask,
   waitHttpReady,
@@ -192,6 +193,22 @@ async function coldBringUp(
   session_id: string,
   body: BringUpBody,
 ): Promise<BringUpResult> {
+  // Local-mode short-circuit: no k8s, no ECS. Point the session at a harness
+  // already running on the host (a single harness multiplexes all sessions
+  // via its internal sessions map). task_arn='local' is the sentinel the
+  // reconciler uses to skip stopTask on these rows.
+  if (env.LAP_LOCAL_SANDBOX_URL) {
+    const sandbox_url = env.LAP_LOCAL_SANDBOX_URL.replace(/\/+$/, "");
+    await setPhase(session_id, "creating_sandbox", "local mode");
+    await prisma.session.update({
+      where: { session_id },
+      data: { task_arn: "local" },
+    });
+    await setPhase(session_id, "waiting_harness");
+    await waitHttpReady(sandbox_url);
+    await setPhase(session_id, "harness_ready");
+    return finishBringUp(agent, session_id, body, sandbox_url);
+  }
   await setPhase(session_id, "creating_sandbox");
   const { task_arn } = await runTask({
     agent,

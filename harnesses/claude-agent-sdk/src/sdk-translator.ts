@@ -11,6 +11,8 @@
  * type. The shape on the wire stays identical.
  */
 
+import { randomUUID } from "node:crypto";
+
 import { type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -18,6 +20,14 @@ import {
   type SessionEvent,
   type TranslationContext,
 } from "@lap/harness-shared/session-event";
+
+// Every SessionEvent we emit gets a stable UUID. The DB has UNIQUE
+// (session_id, event_id) so re-delivery from a flapping subscriber, an
+// SDK retry, or a worker scan-loop attaching a second subscriber all
+// collapse to one row via ON CONFLICT DO NOTHING.
+function newEventId(): string {
+  return randomUUID();
+}
 
 // ---------------------------------------------------------------------------
 // Per-turn context the harness threads through translate() calls.
@@ -85,7 +95,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
 
     if (ev.type === "system" && ev.subtype === "init" && ev.session_id) {
       ctx.meta.sdk_session_id = ev.session_id;
-      return [{ type: "status", status: "ready" }];
+      return [{ event_id: newEventId(), type: "status", status: "ready" }];
     }
 
     if (ev.type === "assistant" && ev.message) {
@@ -139,6 +149,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
 
       if (block.type === "text") {
         out.push({
+          event_id: newEventId(),
           type: "assistant_text",
           message_id: ctx.messageId,
           part_id,
@@ -146,6 +157,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
         });
       } else if (block.type === "thinking") {
         out.push({
+          event_id: newEventId(),
           type: "thinking",
           message_id: ctx.messageId,
           part_id,
@@ -153,6 +165,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
         });
       } else if (block.type === "tool_use") {
         out.push({
+          event_id: newEventId(),
           type: "tool_call",
           message_id: ctx.messageId,
           part_id,
@@ -190,6 +203,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
           ? block.content
           : "";
       out.push({
+        event_id: newEventId(),
         type: "tool_result",
         call_id: block.tool_use_id ?? "",
         output,
@@ -223,6 +237,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
 
     const out: SessionEvent[] = [
       {
+        event_id: newEventId(),
         type: "turn_complete",
         cost_usd: ev.total_cost_usd ?? null,
         usage: ctx.meta.usage,
@@ -232,7 +247,7 @@ export class ClaudeSdkTranslator extends SessionEventTranslator<
     if (ev.is_error) {
       const message = String(ev.result ?? "agent reported error");
       ctx.meta.error = { name: "ResultError", message };
-      out.push({ type: "error", message });
+      out.push({ event_id: newEventId(), type: "error", message });
     }
     return out;
   }

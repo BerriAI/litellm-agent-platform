@@ -31,41 +31,56 @@ export type SessionPhaseLike =
   | "installing_deps"
   | string;
 
+/**
+ * Every persisted event carries a stable `event_id` UUID minted at the
+ * harness emit site. The DB has a UNIQUE INDEX on (session_id, event_id),
+ * so the second/third/Nth subscriber writing the same event no-ops via
+ * ON CONFLICT DO NOTHING. Makes the pipeline idempotent end-to-end and
+ * means a flapping subscriber can't double-write.
+ */
+interface EventBase {
+  event_id: string;
+}
+
 export type SessionEvent =
-  | {
+  | (EventBase & {
       type: "assistant_text";
       message_id: string;
       part_id: string;
       text: string;
-    }
-  | {
+    })
+  | (EventBase & {
       type: "thinking";
       message_id: string;
       part_id: string;
       text: string;
-    }
-  | {
+    })
+  | (EventBase & {
       type: "tool_call";
       message_id: string;
       part_id: string;
       call_id: string;
       tool: string;
       input: unknown;
-    }
-  | {
+    })
+  | (EventBase & {
       type: "tool_result";
       call_id: string;
       output: string;
       is_error: boolean;
-    }
-  | { type: "status"; status: SessionStatusLike; detail?: string }
-  | {
+    })
+  | (EventBase & {
+      type: "status";
+      status: SessionStatusLike;
+      detail?: string;
+    })
+  | (EventBase & {
       type: "phase";
       phase: SessionPhaseLike;
       detail?: string | null;
-    }
-  | { type: "user_message"; text: string }
-  | {
+    })
+  | (EventBase & { type: "user_message"; text: string })
+  | (EventBase & {
       type: "turn_complete";
       cost_usd: number | null;
       usage: {
@@ -74,8 +89,8 @@ export type SessionEvent =
         cache_read?: number;
         cache_write?: number;
       } | null;
-    }
-  | { type: "error"; message: string };
+    })
+  | (EventBase & { type: "error"; message: string });
 
 /**
  * Translation context. Concrete translators tighten this generic with

@@ -4,6 +4,17 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
+# Read this first: SessionEvent architecture
+
+How harness output reaches the UI, Slack, and external consumers — single
+unified log, one translator, one read path:
+
+→ **[docs/session-event-flow.md](docs/session-event-flow.md)**
+
+If you're touching anything under `harnesses/`, `src/worker/`, the
+`/sessions/[sid]/events` route, or the `managed_agent_session_event`
+table, read that doc before making changes.
+
 # Debugging a stuck or slow session
 
 When investigating a session that's stuck in `creating` or that took unexpectedly long, **start with the diagnose endpoint** instead of running a dozen kubectl / curl / log queries by hand:

@@ -91,59 +91,86 @@ const subscribers = new Map<string, Subscriber>();
  * or an unrecoverable error happens. Cleans up its own subscribers entry
  * on exit.
  */
+/**
+ * One round-trip through the harness SSE — opens the stream, reads
+ * frames, persists events. Returns on signal abort or stream close.
+ * Throws on undici socket errors; the outer loop reconnects.
+ */
+async function pumpOnce(
+  session_id: string,
+  sandbox_url: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const upstream = await harnessOpenEventStream({ sandbox_url, signal });
+  if (!upstream.body) return;
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+
+  while (!signal.aborted) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    pending += decoder.decode(value, { stream: true });
+    for (;;) {
+      const idx = pending.indexOf("\n\n");
+      if (idx < 0) break;
+      const frame = pending.slice(0, idx);
+      pending = pending.slice(idx + 2);
+      for (const line of frame.split(/\r?\n/)) {
+        if (!line.startsWith("data:")) continue;
+        const raw = line.slice(5).trimStart();
+        if (!raw) continue;
+        let event: SessionEvent;
+        try {
+          event = JSON.parse(raw) as SessionEvent;
+        } catch {
+          continue;
+        }
+        // Defensive: ignore frames that don't carry a recognised `type`.
+        // The harness's SessionEventTranslator is the single source of
+        // truth — anything else on the wire is wire-protocol noise (e.g.
+        // SSE comments, keep-alive pings) and should be dropped.
+        if (!event || typeof event.type !== "string") continue;
+        try {
+          await appendSessionEvent(session_id, event);
+        } catch (e) {
+          console.error(
+            `session_events: append failed for ${session_id}:`,
+            e,
+          );
+        }
+      }
+    }
+  }
+}
+
 async function runSessionSubscriber(
   session_id: string,
   sandbox_url: string,
   signal: AbortSignal,
 ): Promise<void> {
+  // Reconnect loop. A harness restart sends a TCP RST that surfaces as
+  // an undici `TypeError: terminated`; without this loop the subscriber
+  // dies on first RST and never comes back. Exponential-ish backoff
+  // capped at 5s so a permanently-dead pod doesn't tight-loop.
+  let backoff = 250;
   try {
-    const upstream = await harnessOpenEventStream({ sandbox_url, signal });
-    if (!upstream.body) return;
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder();
-    let pending = "";
-
     while (!signal.aborted) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += decoder.decode(value, { stream: true });
-      for (;;) {
-        const idx = pending.indexOf("\n\n");
-        if (idx < 0) break;
-        const frame = pending.slice(0, idx);
-        pending = pending.slice(idx + 2);
-        for (const line of frame.split(/\r?\n/)) {
-          if (!line.startsWith("data:")) continue;
-          const raw = line.slice(5).trimStart();
-          if (!raw) continue;
-          let event: SessionEvent;
-          try {
-            event = JSON.parse(raw) as SessionEvent;
-          } catch {
-            continue;
-          }
-          // Defensive: ignore frames that don't carry a recognised `type`.
-          // The harness's SessionEventTranslator is the single source of
-          // truth — anything else on the wire is wire-protocol noise (e.g.
-          // SSE comments, keep-alive pings) and should be dropped.
-          if (!event || typeof event.type !== "string") continue;
-          try {
-            await appendSessionEvent(session_id, event);
-          } catch (e) {
-            console.error(
-              `session_events: append failed for ${session_id}:`,
-              e,
-            );
-          }
-        }
+      try {
+        await pumpOnce(session_id, sandbox_url, signal);
+        // Clean close (`done` from reader.read()). Reconnect immediately —
+        // some proxies idle-close SSE every 30–60s.
+        backoff = 250;
+      } catch (e) {
+        if (signal.aborted) break;
+        console.warn(
+          `session_events: subscriber for ${session_id} disconnected ` +
+            `(${e instanceof Error ? e.message : String(e)}); ` +
+            `reconnecting in ${backoff}ms`,
+        );
+        await new Promise((r) => setTimeout(r, backoff));
+        backoff = Math.min(backoff * 2, 5000);
       }
-    }
-  } catch (e) {
-    if (!signal.aborted) {
-      console.error(
-        `session_events: subscriber for ${session_id} failed:`,
-        e,
-      );
     }
   } finally {
     subscribers.delete(session_id);
@@ -157,9 +184,16 @@ async function runSessionSubscriber(
  */
 async function scanReadySessions(): Promise<void> {
   let rows: { session_id: string; sandbox_url: string | null }[];
+  // Local mode: only follow rows whose sandbox we know is reachable from
+  // this process (the host harness backing LAP_LOCAL_SANDBOX_URL). Avoids
+  // hammering host.docker.internal URLs from k8s-spawned sessions a
+  // separately-running production worker owns.
+  const where = env.LAP_LOCAL_SANDBOX_URL.length > 0
+    ? { status: "ready", task_arn: "local", sandbox_url: { not: null } }
+    : { status: "ready", sandbox_url: { not: null } };
   try {
     rows = await prisma.session.findMany({
-      where: { status: "ready", sandbox_url: { not: null } },
+      where,
       select: { session_id: true, sandbox_url: true },
     });
   } catch (e) {
@@ -197,12 +231,24 @@ async function sessionEventTick(): Promise<void> {
   }
 }
 
-setInterval(tick, intervalMs);
-tick();
+// Local-mode short-circuit: when LAP_LOCAL_SANDBOX_URL is set the platform
+// isn't talking to k8s/ECS, so the reconciler + warm-pool ticks would only
+// produce errors (or, worse, fight a separately-running production worker).
+// Skip both. The SessionEvent subscriber still runs — it's what lets the
+// UI see harness output in local-dev.
+const localMode = env.LAP_LOCAL_SANDBOX_URL.length > 0;
+if (!localMode) {
+  setInterval(tick, intervalMs);
+  tick();
+}
 setInterval(sessionEventTick, SESSION_EVENT_SCAN_INTERVAL_MS);
 sessionEventTick();
 console.log(
-  `reconciler worker started (interval=${intervalMs}ms, ` +
-    `warm_pool_size=${env.WARM_POOL_SIZE}, ` +
-    `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS})`,
+  localMode
+    ? `worker started in local mode (sandbox=${env.LAP_LOCAL_SANDBOX_URL}, ` +
+        `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS}; ` +
+        `reconcile + warm-pool ticks disabled)`
+    : `reconciler worker started (interval=${intervalMs}ms, ` +
+        `warm_pool_size=${env.WARM_POOL_SIZE}, ` +
+        `session_event_scan_interval_ms=${SESSION_EVENT_SCAN_INTERVAL_MS})`,
 );

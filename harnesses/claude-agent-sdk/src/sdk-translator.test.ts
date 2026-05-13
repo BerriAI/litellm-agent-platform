@@ -41,12 +41,15 @@ describe("ClaudeSdkTranslator", () => {
       ctx,
     );
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "assistant_text",
       message_id: "msg_X",
       part_id: "msg_X_b0",
       text: "hello world",
     });
+    expect((events[0] as { event_id: string }).event_id).toMatch(
+      /^[0-9a-f-]{36}$/i,
+    );
   });
 
   it("thinking block -> thinking SessionEvent", () => {
@@ -88,7 +91,7 @@ describe("ClaudeSdkTranslator", () => {
       ctx,
     );
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "tool_call",
       message_id: "msg_X",
       part_id: "msg_X_b0",
@@ -117,7 +120,7 @@ describe("ClaudeSdkTranslator", () => {
       ctx,
     );
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "tool_result",
       call_id: "toolu_xyz",
       output: "file contents",
@@ -191,7 +194,8 @@ describe("ClaudeSdkTranslator", () => {
       m({ type: "system", subtype: "init", session_id: "sdk-sess-42" }),
       ctx,
     );
-    expect(events).toEqual([{ type: "status", status: "ready" }]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "status", status: "ready" });
     expect(ctx.meta.sdk_session_id).toBe("sdk-sess-42");
   });
 
@@ -212,7 +216,7 @@ describe("ClaudeSdkTranslator", () => {
       ctx,
     );
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "turn_complete",
       cost_usd: 0.0123,
       usage: { input: 100, output: 50, cache_read: 10, cache_write: 5 },
@@ -232,7 +236,7 @@ describe("ClaudeSdkTranslator", () => {
     );
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe("turn_complete");
-    expect(events[1]).toEqual({ type: "error", message: "model exploded" });
+    expect(events[1]).toMatchObject({ type: "error", message: "model exploded" });
     expect(ctx.meta.error?.message).toBe("model exploded");
   });
 });
