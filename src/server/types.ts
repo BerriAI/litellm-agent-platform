@@ -430,23 +430,6 @@ export interface ServerEnv {
   LITELLM_API_BASE: string;
   LITELLM_API_KEY: string;
   /**
-   * Local sandbox mode. When set to a non-empty URL (e.g.
-   * `http://localhost:4096`), session creation skips k8s/ECS entirely and
-   * points every new session at this URL — a harness already running on the
-   * host. One harness multiplexes many sessions (the harness's `sessions`
-   * map is keyed by harness session id). The reconciler skips sessions with
-   * `task_arn='local'` so it doesn't try to stop a non-existent ECS task.
-   *
-   * Empty string (default) → normal k8s/ECS flow.
-   *
-   * Local workflow:
-   *   1. cd harnesses/claude-agent-sdk
-   *   2. PORT=4096 ANTHROPIC_API_KEY=sk-ant-… node --import tsx src/server.ts
-   *   3. Set LAP_LOCAL_SANDBOX_URL=http://localhost:4096 in the platform env
-   *   4. Every POST /sessions returns ready in <1s with no k8s involved.
-   */
-  LAP_LOCAL_SANDBOX_URL: string;
-  /**
    * Base URL the in-sandbox harness uses to call back into this platform —
    * specifically the agent memory endpoints. Empty string means the memory
    * tools are unavailable to the harness (graceful no-op), which is fine for
