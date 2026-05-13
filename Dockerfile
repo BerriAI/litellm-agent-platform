@@ -37,6 +37,12 @@ RUN apk add --no-cache openssl
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# `COPY . .` overwrites harnesses/_shared/ from the host, which has no dist/.
+# The `file:` dep symlink at node_modules/@lap/harness-shared then points at
+# a directory with no compiled output, so typecheck fails on imports like
+# `@lap/harness-shared/session-event`. Rebuild dist/ here before next build.
+RUN cd harnesses/_shared && npx tsc
+
 # `npm ci` ran in the `deps` stage without prisma/schema.prisma in scope, so
 # the Prisma client wasn't generated. Generate it here once the schema is
 # present, before `next build` typechecks against `Prisma.*` types.
