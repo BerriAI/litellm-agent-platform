@@ -526,11 +526,11 @@ export default function SessionThreadView() {
               // Store it verbatim so tool blocks render in the streaming
               // view too (not just after refreshThread).
               const part = props.part as HarnessMessagePart | undefined;
-              if (part && typeof (part as { id?: string }).id === "string") {
-                partsState.set(
-                  (part as { id: string }).id,
-                  part,
-                );
+              const rawId = part
+                ? (part as Record<string, unknown>).id
+                : undefined;
+              if (part && typeof rawId === "string") {
+                partsState.set(rawId, part);
                 renderStreaming();
               }
             }

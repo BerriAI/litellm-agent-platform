@@ -379,6 +379,27 @@ function useEventStream(url: string, open: boolean, label: string) {
   return { frames, status, error: err, clear };
 }
 
+const HARNESS_PREF_KEY = "inspector_show_harness";
+
+function readHarnessPref(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(HARNESS_PREF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeHarnessPref(v: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(HARNESS_PREF_KEY, v ? "1" : "0");
+  } catch {
+    /* localStorage unavailable (private mode, quota) — preference simply
+     * won't persist; current-session toggle still works. */
+  }
+}
+
 export function InspectorPanel({
   open,
   onClose,
@@ -389,27 +410,68 @@ export function InspectorPanel({
   sessionId: string;
 }) {
   const [hideHeartbeat, setHideHeartbeat] = useState(true);
+  // Persisted per-session preference. We initialize from localStorage on
+  // mount (not via useState initializer, which would run on the server too).
+  const [showHarness, setShowHarness] = useState(false);
+  useEffect(() => {
+    setShowHarness(readHarnessPref());
+  }, []);
+  const toggleHarness = useCallback(() => {
+    setShowHarness((prev) => {
+      const next = !prev;
+      writeHarnessPref(next);
+      return next;
+    });
+  }, []);
+
   // Single channel: the UI's POST /message_stream tee'd via fetch patch.
   // Patch is installed from page mount (NOT from inspector-open), so a send
   // fired BEFORE you open the inspector still shows up here.
   const platform = useFetchInterceptor(sessionId);
 
+  const harnessUrl = useMemo(
+    () =>
+      `/api/v1/managed_agents/sessions/${encodeURIComponent(sessionId)}/stream`,
+    [sessionId],
+  );
+  // Only actually subscribe when both the inspector and harness pane are
+  // open — `useEventStream` gates on its `open` arg, so passing false keeps
+  // the connection torn down.
+  const harness = useEventStream(harnessUrl, open && showHarness, "harness");
+
+  const clearAll = useCallback(() => {
+    platform.clear();
+    harness.clear();
+  }, [platform, harness]);
+
   // Note: we render `null` instead of unmounting when !open so the hooks
   // above keep running — that's how the fetch patch survives across panel
   // toggles and captures sends that happen while the inspector is closed.
   if (!open) return null;
+  const widthClass = showHarness ? "w-[1000px]" : "w-[560px]";
   return (
-    <aside className="flex flex-col h-full min-h-0 border-l border-gray-200 bg-white w-[560px] shrink-0">
+    <aside
+      className={`flex flex-col h-full min-h-0 border-l border-gray-200 bg-white ${widthClass} shrink-0`}
+    >
       <header className="flex items-center gap-2 px-4 py-2 border-b border-gray-200">
         <Activity className="size-3.5 text-gray-500" />
         <span className="text-[13px] font-medium text-gray-800">Wire inspector</span>
         <span className="font-mono text-[11px] text-gray-400">
           session {sessionId.slice(0, 8)}…
         </span>
+        <label className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showHarness}
+            onChange={toggleHarness}
+            className="size-3"
+          />
+          show harness bus
+        </label>
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto p-1 hover:bg-gray-100 rounded"
+          className="p-1 hover:bg-gray-100 rounded"
           title="Close inspector"
         >
           <X className="size-4 text-gray-500" />
@@ -428,40 +490,75 @@ export function InspectorPanel({
         </label>
         <button
           type="button"
-          onClick={() => platform.clear()}
+          onClick={clearAll}
           className="text-gray-500 hover:text-gray-800 underline-offset-2 hover:underline"
         >
           clear
         </button>
         <span className="ml-auto text-gray-400 font-mono">
-          {platform.frames.length} frames
+          {platform.frames.length}
+          {showHarness ? ` · ${harness.frames.length}` : ""} frames
         </span>
       </div>
 
-      <div className="flex items-center gap-2 px-4 py-1.5 bg-violet-50/40 border-b border-gray-200">
-        <Badge variant="secondary" className="text-[10px] bg-violet-100 text-violet-700 hover:bg-violet-100">
-          /message_stream
-        </Badge>
-        <span className="font-mono text-[10.5px] text-gray-600 truncate">
-          POST /sessions/:id/message_stream
-        </span>
-        <StatusPill status={platform.status} error={platform.error} />
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {platform.frames.map((f, i) => (
-          <EventRow key={i} frame={f} hideHeartbeat={hideHeartbeat} />
-        ))}
-        {platform.frames.length === 0 && (
-          <div className="p-3 text-[11px] text-gray-400 text-center leading-relaxed">
-            patch is armed — send a message from the composer<br />
-            (or wait if you just sent one — the in-flight stream will catch up)
+      <div className="flex flex-1 min-h-0">
+        <section className="flex flex-col flex-1 min-w-0 min-h-0">
+          <div className="flex items-center gap-2 px-4 py-1.5 bg-violet-50/40 border-b border-gray-200">
+            <Badge
+              variant="secondary"
+              className="text-[10px] bg-violet-100 text-violet-700 hover:bg-violet-100"
+            >
+              /message_stream
+            </Badge>
+            <span className="font-mono text-[10.5px] text-gray-600 truncate">
+              POST /sessions/:id/message_stream
+            </span>
+            <StatusPill status={platform.status} error={platform.error} />
           </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {platform.frames.map((f, i) => (
+              <EventRow key={i} frame={f} hideHeartbeat={hideHeartbeat} />
+            ))}
+            {platform.frames.length === 0 && (
+              <div className="p-3 text-[11px] text-gray-400 text-center leading-relaxed">
+                patch is armed — send a message from the composer<br />
+                (or wait if you just sent one — the in-flight stream will catch up)
+              </div>
+            )}
+          </div>
+        </section>
+
+        {showHarness && (
+          <section className="flex flex-col flex-1 min-w-0 min-h-0 border-l border-gray-200">
+            <div className="flex items-center gap-2 px-4 py-1.5 bg-blue-50/40 border-b border-gray-200">
+              <Badge
+                variant="secondary"
+                className="text-[10px] bg-blue-100 text-blue-700 hover:bg-blue-100"
+              >
+                /stream
+              </Badge>
+              <span className="font-mono text-[10.5px] text-gray-600 truncate">
+                GET /sessions/:id/stream
+              </span>
+              <StatusPill status={harness.status} error={harness.error} />
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              {harness.frames.map((f, i) => (
+                <EventRow key={i} frame={f} hideHeartbeat={hideHeartbeat} />
+              ))}
+              {harness.frames.length === 0 && (
+                <div className="p-3 text-[11px] text-gray-400 text-center leading-relaxed">
+                  subscribed to the raw harness bus<br />
+                  events appear as the agent loop emits them
+                </div>
+              )}
+            </div>
+          </section>
         )}
       </div>
 
       <footer className="px-4 py-1.5 border-t border-gray-200 text-[10px] text-gray-400 font-mono">
-        tee'd from the UI's actual fetch · request body + every SSE frame
+        tee&apos;d /message_stream · optional raw /stream
       </footer>
     </aside>
   );
