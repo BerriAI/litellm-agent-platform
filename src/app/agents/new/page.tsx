@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, ChevronRight, Plus, Search, Trash2, Upload } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Loader2, Plus, Search, Trash2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,11 +23,14 @@ import {
   McpRow,
   McpToolRow,
   ModelRow,
+  SkillRow,
   createAgent,
+  createSkill,
   getPreinstalledGithubRepo,
   listMcps,
   listMcpTools,
   listModels,
+  listSkills,
   listTemplates,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -142,6 +145,63 @@ export default function NewAgentPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Inline skill section
+  const [skillName, setSkillName] = useState("");
+  const [skillDesc, setSkillDesc] = useState("");
+  const [skillInstructions, setSkillInstructions] = useState("");
+  const [skillSaveToLibrary, setSkillSaveToLibrary] = useState(true);
+  // null = hidden, "write" = inline form, "pick" = pick from library modal
+  const [skillMode, setSkillMode] = useState<null | "write" | "pick">(null);
+  const [skillDragOver, setSkillDragOver] = useState(false);
+  const [librarySkills, setLibrarySkills] = useState<SkillRow[]>([]);
+  const [loadingLibrary, setLoadingLibrary] = useState(false);
+
+  async function openPickSkill() {
+    setSkillMode("pick");
+    setLoadingLibrary(true);
+    try {
+      setLibrarySkills(await listSkills());
+    } catch {
+      // non-fatal
+    } finally {
+      setLoadingLibrary(false);
+    }
+  }
+
+  function parseSkillMd(text: string): { name: string; description: string; content: string } {
+    const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+    if (!m) return { name: "", description: "", content: text.trim() };
+    const fm = m[1];
+    const body = m[2].trim();
+    return {
+      name: fm.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? "",
+      description: fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? "",
+      content: body,
+    };
+  }
+
+  function handleSkillMdFile(file: File) {
+    if (!file.name.endsWith(".md")) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result;
+      if (typeof text !== "string") return;
+      const { name, description, content } = parseSkillMd(text);
+      setSkillName(name);
+      setSkillDesc(description);
+      setSkillInstructions(content);
+      setSkillMode("write");
+    };
+    reader.readAsText(file);
+  }
+
+  function clearSkill() {
+    setSkillName("");
+    setSkillDesc("");
+    setSkillInstructions("");
+    setSkillMode(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -386,6 +446,21 @@ export default function NewAgentPage() {
               : systemPrompt.trimEnd();
           finalPrompt =
             `${basePrompt}\n\n${SEPARATOR}\n\n${editedSkill}`.trim() || undefined;
+        }
+      }
+
+      // Merge inline skill into prompt
+      if (skillInstructions.trim()) {
+        const base = (finalPrompt ?? "").trimEnd();
+        finalPrompt = base
+          ? `${base}\n<!-- skill -->\n${skillInstructions.trim()}`
+          : skillInstructions.trim();
+        if (skillSaveToLibrary && skillName.trim()) {
+          createSkill({
+            name: skillName.trim(),
+            description: skillDesc.trim() || undefined,
+            content: skillInstructions.trim(),
+          }).catch(() => {});
         }
       }
 
@@ -774,6 +849,201 @@ export default function NewAgentPage() {
                 rows={6}
                 disabled={submitting}
               />
+            </div>
+
+            {/* Skill section */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Skill (optional)</Label>
+                {skillMode === null ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSkillMode("write")}
+                      disabled={submitting}
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    >
+                      <Plus className="size-3" />
+                      Write
+                    </button>
+                    <span className="text-[11px] text-muted-foreground/40">·</span>
+                    <label
+                      className={cn(
+                        "flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground",
+                        submitting && "pointer-events-none opacity-40",
+                      )}
+                    >
+                      <Upload className="size-3" />
+                      Upload .md
+                      <input
+                        type="file"
+                        accept=".md"
+                        className="sr-only"
+                        disabled={submitting}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleSkillMdFile(f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    <span className="text-[11px] text-muted-foreground/40">·</span>
+                    <button
+                      type="button"
+                      onClick={() => void openPickSkill()}
+                      disabled={submitting}
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    >
+                      <FileText className="size-3" />
+                      Pick from library
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={clearSkill}
+                    disabled={submitting}
+                    className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="size-3" />
+                    Remove
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                A skill is a reusable instruction block injected after the system prompt.
+              </p>
+
+              {skillMode === "write" ? (
+                <div
+                  className={cn(
+                    "rounded-lg border bg-card p-4 space-y-3 transition-colors",
+                    skillDragOver && "border-primary bg-primary/5",
+                  )}
+                  onDragOver={(e) => { e.preventDefault(); setSkillDragOver(true); }}
+                  onDragLeave={() => setSkillDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setSkillDragOver(false);
+                    const f = e.dataTransfer.files[0];
+                    if (f) handleSkillMdFile(f);
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] text-muted-foreground">Drag a <code className="font-mono">.md</code> onto this card to replace, or{" "}
+                      <label className={cn("cursor-pointer underline underline-offset-2 hover:text-foreground", submitting && "pointer-events-none opacity-40")}>
+                        browse
+                        <input type="file" accept=".md" className="sr-only" disabled={submitting}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSkillMdFile(f); e.target.value = ""; }} />
+                      </label>
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="skill-name" className="text-xs">Skill name</Label>
+                    <Input
+                      id="skill-name"
+                      value={skillName}
+                      onChange={(e) => setSkillName(e.target.value)}
+                      placeholder="e.g. code-reviewer"
+                      disabled={submitting}
+                      className="text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="skill-desc" className="text-xs">Description</Label>
+                    <Textarea
+                      id="skill-desc"
+                      value={skillDesc}
+                      onChange={(e) => setSkillDesc(e.target.value)}
+                      placeholder="What this skill does…"
+                      rows={2}
+                      disabled={submitting}
+                      className="text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="skill-instructions" className="text-xs">Instructions</Label>
+                    <Textarea
+                      id="skill-instructions"
+                      value={skillInstructions}
+                      onChange={(e) => setSkillInstructions(e.target.value)}
+                      placeholder={"Step-by-step instructions for the agent…"}
+                      rows={6}
+                      disabled={submitting}
+                      className="font-mono text-xs"
+                    />
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <span
+                      className={cn(
+                        "grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors",
+                        skillSaveToLibrary
+                          ? "border-foreground bg-foreground text-background"
+                          : "border-border bg-transparent",
+                      )}
+                      aria-hidden
+                    >
+                      {skillSaveToLibrary ? <Check className="size-3" /> : null}
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={skillSaveToLibrary}
+                      onChange={(e) => setSkillSaveToLibrary(e.target.checked)}
+                      disabled={submitting}
+                    />
+                    <span className="text-[13px] text-muted-foreground">
+                      Save to skills library for reuse
+                    </span>
+                  </label>
+                </div>
+              ) : skillMode === "pick" ? (
+                <div className="rounded-lg border bg-card">
+                  {loadingLibrary ? (
+                    <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Loading…
+                    </div>
+                  ) : librarySkills.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-muted-foreground">
+                      No skills in library yet.{" "}
+                      <button
+                        type="button"
+                        onClick={() => setSkillMode("write")}
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        Write one instead
+                      </button>
+                    </div>
+                  ) : (
+                    <ul className="divide-y">
+                      {librarySkills.map((sk) => (
+                        <li key={sk.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSkillName(sk.name);
+                              setSkillDesc(sk.description ?? "");
+                              setSkillInstructions(sk.content);
+                              setSkillSaveToLibrary(false);
+                              setSkillMode("write");
+                            }}
+                            className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                          >
+                            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium">{sk.name}</p>
+                              {sk.description ? (
+                                <p className="truncate text-xs text-muted-foreground">{sk.description}</p>
+                              ) : null}
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-1.5">

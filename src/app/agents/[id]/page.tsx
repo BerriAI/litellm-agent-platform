@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Loader2, Play, RefreshCw } from "lucide-react";
+import { ChevronRight, FileText, Loader2, Pencil, Play, Plus, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,10 @@ import {
   AgentRow,
   ApiError,
   SessionRow,
+  SkillRow,
+  createSkill,
   getAgent,
+  listSkills,
   listSessions,
   spawnSession,
   updateAgent,
@@ -68,6 +71,16 @@ export default function AgentDetailPage({ params }: PageProps) {
   const [spawning, setSpawning] = useState(false);
   const [editingPfp, setEditingPfp] = useState(false);
   const [pfpSaving, setPfpSaving] = useState(false);
+  const [showSkillModal, setShowSkillModal] = useState(false);
+  const [skillTab, setSkillTab] = useState<"write" | "upload" | "existing">("write");
+  const [skillDragOver, setSkillDragOver] = useState(false);
+  const [skillUploading, setSkillUploading] = useState(false);
+  const [skillSaving, setSkillSaving] = useState(false);
+  const [existingSkills, setExistingSkills] = useState<SkillRow[]>([]);
+  // Write form
+  const [skillWriteName, setSkillWriteName] = useState("");
+  const [skillWriteDesc, setSkillWriteDesc] = useState("");
+  const [skillWriteInstructions, setSkillWriteInstructions] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -120,6 +133,91 @@ export default function AgentDetailPage({ params }: PageProps) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
       setError(msg);
       setSpawning(false);
+    }
+  }
+
+  function parseSkillMd(text: string): { name: string; description: string; content: string } {
+    const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+    if (!m) return { name: "Untitled skill", description: "", content: text };
+    const fm = m[1];
+    const body = m[2].trim();
+    const nameMatch = fm.match(/^name:\s*(.+)$/m);
+    const descMatch = fm.match(/^description:\s*(.+)$/m);
+    return {
+      name: nameMatch?.[1]?.trim() ?? "Untitled skill",
+      description: descMatch?.[1]?.trim() ?? "",
+      content: body,
+    };
+  }
+
+  async function openSkillModal() {
+    setSkillWriteName("");
+    setSkillWriteDesc("");
+    setSkillWriteInstructions("");
+    setSkillTab("write");
+    setShowSkillModal(true);
+    try {
+      setExistingSkills(await listSkills());
+    } catch {
+      // non-fatal
+    }
+  }
+
+  async function handleSkillWrite() {
+    if (!skillWriteName.trim() || !skillWriteInstructions.trim()) return;
+    setSkillSaving(true);
+    setError(null);
+    try {
+      await createSkill({
+        name: skillWriteName.trim(),
+        description: skillWriteDesc.trim() || undefined,
+        content: skillWriteInstructions.trim(),
+      });
+      await attachSkillContent(skillWriteInstructions.trim());
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSkillSaving(false);
+    }
+  }
+
+  async function attachSkillContent(skillContent: string) {
+    if (!agent) return;
+    const basePrompt = agent.prompt?.split(/\n<!-- skill -->\n/)[0]?.trim() ?? "";
+    const newPrompt = skillContent.trim()
+      ? `${basePrompt}\n<!-- skill -->\n${skillContent.trim()}`
+      : basePrompt;
+    const updated = await updateAgent(agent.id, { prompt: newPrompt });
+    setAgent(updated);
+    setShowSkillModal(false);
+  }
+
+  async function handleSkillFile(file: File) {
+    if (!file.name.endsWith(".md")) {
+      setError("Only .md files are supported");
+      return;
+    }
+    setSkillUploading(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      const { name, description, content } = parseSkillMd(text);
+      await createSkill({ name, description, content });
+      await attachSkillContent(content);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSkillUploading(false);
+    }
+  }
+
+  async function handleDetachSkill() {
+    if (!agent) return;
+    setError(null);
+    try {
+      await attachSkillContent("");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     }
   }
 
@@ -211,6 +309,14 @@ export default function AgentDetailPage({ params }: PageProps) {
                 onClick={() => router.push(`/agents/${id}/memory`)}
               >
                 Memory
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => void openSkillModal()}
+              >
+                <FileText className="size-4" />
+                {agent.prompt?.includes("<!-- skill -->") ? "Change skill" : "Add skill"}
               </Button>
               <Button
                 size="lg"
@@ -312,7 +418,20 @@ export default function AgentDetailPage({ params }: PageProps) {
                     </dd>
                     {skill ? (
                       <>
-                        <dt className="text-muted-foreground">Skill</dt>
+                        <dt className="text-muted-foreground">
+                          <div className="flex items-center gap-2">
+                            <span>Skill</span>
+                            <button
+                              type="button"
+                              onClick={() => void handleDetachSkill()}
+                              className="inline-flex items-center gap-0.5 rounded text-[10px] text-muted-foreground/60 hover:text-destructive focus-visible:outline-none"
+                              title="Remove skill from agent"
+                            >
+                              <X className="size-2.5" />
+                              detach
+                            </button>
+                          </div>
+                        </dt>
                         <dd>
                           <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
                             {skill}
@@ -374,6 +493,159 @@ export default function AgentDetailPage({ params }: PageProps) {
           <div className="mt-8">
             <CallAgentSnippets agentId={agent.id} />
           </div>
+
+          {/* Skill modal */}
+          {showSkillModal ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+              <div className="w-full max-w-lg rounded-xl border bg-card shadow-xl">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b px-6 py-4">
+                  <h2 className="text-lg font-semibold">
+                    {skillTab === "write" ? "Write skill instructions" : skillTab === "upload" ? "Upload skill" : "My skills"}
+                  </h2>
+                  <Button variant="ghost" size="sm" onClick={() => setShowSkillModal(false)} className="h-7 w-7 p-0">
+                    <X className="size-4" />
+                  </Button>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex border-b">
+                  {(["write", "upload", "existing"] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setSkillTab(t)}
+                      className={`px-5 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none ${
+                        skillTab === t
+                          ? "border-b-2 border-foreground text-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {t === "write" ? "Write" : t === "upload" ? "Upload .md" : "My skills"}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tab body */}
+                <div className="px-6 py-5">
+                  {skillTab === "write" ? (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium">Skill name</label>
+                        <input
+                          className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                          placeholder="e.g. code-reviewer"
+                          value={skillWriteName}
+                          onChange={(e) => setSkillWriteName(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium">Description</label>
+                        <textarea
+                          className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                          rows={2}
+                          placeholder="What this skill does…"
+                          value={skillWriteDesc}
+                          onChange={(e) => setSkillWriteDesc(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium">Instructions</label>
+                        <textarea
+                          className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                          rows={8}
+                          placeholder="Step-by-step instructions for the agent…"
+                          value={skillWriteInstructions}
+                          onChange={(e) => setSkillWriteInstructions(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  ) : skillTab === "upload" ? (
+                    <>
+                      <label
+                        className={`flex h-36 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed transition-colors ${
+                          skillDragOver ? "border-primary bg-primary/5" : "border-muted-foreground/30 hover:border-muted-foreground/60"
+                        }`}
+                        onDragOver={(e) => { e.preventDefault(); setSkillDragOver(true); }}
+                        onDragLeave={() => setSkillDragOver(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setSkillDragOver(false);
+                          const file = e.dataTransfer.files[0];
+                          if (file) void handleSkillFile(file);
+                        }}
+                      >
+                        <input
+                          type="file"
+                          accept=".md"
+                          className="sr-only"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) void handleSkillFile(file);
+                          }}
+                        />
+                        <div className="flex size-9 items-center justify-center rounded-md border bg-muted">
+                          <Plus className="size-4 text-muted-foreground" />
+                        </div>
+                        <span className="text-sm text-muted-foreground">
+                          {skillUploading ? "Uploading…" : "Drag and drop or click to upload"}
+                        </span>
+                      </label>
+                      <div className="mt-4">
+                        <p className="text-xs font-medium text-muted-foreground">File requirements</p>
+                        <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                          <li>• <code className="font-mono">.md</code> file with optional YAML frontmatter</li>
+                          <li>• Frontmatter <code className="font-mono">name:</code> / <code className="font-mono">description:</code> auto-extracted</li>
+                        </ul>
+                      </div>
+                    </>
+                  ) : (
+                    <div>
+                      {existingSkills.length === 0 ? (
+                        <p className="py-6 text-center text-sm text-muted-foreground">No saved skills yet.</p>
+                      ) : (
+                        <ul className="max-h-64 overflow-y-auto rounded-lg border divide-y">
+                          {existingSkills.map((sk) => (
+                            <li key={sk.id}>
+                              <button
+                                type="button"
+                                onClick={() => void attachSkillContent(sk.content)}
+                                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors"
+                              >
+                                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate font-medium">{sk.name}</p>
+                                  {sk.description ? (
+                                    <p className="truncate text-xs text-muted-foreground">{sk.description}</p>
+                                  ) : null}
+                                </div>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer — write tab only */}
+                {skillTab === "write" ? (
+                  <div className="flex justify-end gap-2 border-t px-6 py-4">
+                    <Button variant="outline" onClick={() => setShowSkillModal(false)} disabled={skillSaving}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => void handleSkillWrite()}
+                      disabled={skillSaving || !skillWriteName.trim() || !skillWriteInstructions.trim()}
+                    >
+                      {skillSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                      Create &amp; attach
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </>
       ) : !loading && !error ? (
         <div className="py-16 text-center text-sm text-muted-foreground">

@@ -411,6 +411,7 @@ export interface UpdateAgentRequest {
   pfp_url?: string;
   mcp_servers?: string[];
   mcp_allowed_tools?: McpAllowedTools[];
+  prompt?: string;
 }
 
 export function listAgents(): Promise<AgentRow[]> {
@@ -1018,6 +1019,84 @@ export interface AgentTemplate {
   skill: string;
   tools: string[];
   requirements: string | null;
+}
+
+// ---------- Agent skill attachment ----------
+
+export interface AttachSkillByIdRequest {
+  skill_id: string;
+}
+
+export interface AttachSkillInlineRequest {
+  content: string;
+  name?: string;
+  description?: string;
+  save_to_library?: boolean;
+}
+
+export interface AttachSkillResponse {
+  agent: AgentRow;
+  skill?: SkillRow;
+}
+
+export function attachSkillToAgent(
+  agentId: string,
+  req: AttachSkillByIdRequest | AttachSkillInlineRequest,
+): Promise<AttachSkillResponse> {
+  return api<AttachSkillResponse>(
+    "POST",
+    `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/skill`,
+    req,
+  );
+}
+
+export function detachSkillFromAgent(agentId: string): Promise<{ agent: AgentRow }> {
+  return api<{ agent: AgentRow }>(
+    "DELETE",
+    `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/skill`,
+  );
+}
+
+// ---------- Skills ----------
+
+export interface SkillRow {
+  id: string;
+  name: string;
+  description: string | null;
+  content: string;
+  created_at: string;
+}
+
+export interface CreateSkillRequest {
+  name: string;
+  description?: string;
+  content: string;
+}
+
+export interface UpdateSkillRequest {
+  name?: string;
+  description?: string;
+  content?: string;
+}
+
+export function listSkills(): Promise<SkillRow[]> {
+  return api<{ data: SkillRow[] }>("GET", "/v1/skills").then((r) => r.data);
+}
+
+export function getSkill(id: string): Promise<SkillRow> {
+  return api<SkillRow>("GET", `/v1/skills/${encodeURIComponent(id)}`);
+}
+
+export function createSkill(req: CreateSkillRequest): Promise<SkillRow> {
+  return api<SkillRow>("POST", "/v1/skills", req);
+}
+
+export function updateSkill(id: string, req: UpdateSkillRequest): Promise<SkillRow> {
+  return api<SkillRow>("PATCH", `/v1/skills/${encodeURIComponent(id)}`, req);
+}
+
+export function deleteSkill(id: string): Promise<void> {
+  return api<void>("DELETE", `/v1/skills/${encodeURIComponent(id)}`);
 }
 
 // ---------- Harness response helpers ----------
