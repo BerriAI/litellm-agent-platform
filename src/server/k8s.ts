@@ -21,6 +21,8 @@
  *     when running under docker-compose.
  */
 
+import { createHmac } from "node:crypto";
+
 import * as k8s from "@kubernetes/client-node";
 import { fetch } from "undici";
 
@@ -36,6 +38,21 @@ import {
   type RunTaskOpts,
   type TaggedTask,
 } from "@/server/types";
+import type {
+  VaultInterception,
+  VaultInterceptionFingerprint,
+} from "@/lib/vault-types";
+
+// HMAC-derived shared secret for the vault sidecar's /interceptions debug
+// surface. Both sides (platform + vault) recompute this from
+// `MASTER_KEY × task_arn`; vault rejects requests without a matching
+// `X-Vault-Inspect-Token` header. The vault binds on 0.0.0.0 inside the pod
+// so the platform can reach it via pod IP — without this header any
+// pod on the cluster network could harvest stub values from the buffer
+// and use them through the CONNECT proxy. See vault/src/server.ts.
+function vaultInspectToken(task_arn: string): string {
+  return createHmac("sha256", env.MASTER_KEY).update(task_arn).digest("hex");
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -265,23 +282,41 @@ async function buildContainerEnv(
     SESSION_ID: phaseToken,
     HARNESS_PROGRESS_TOKEN: phaseToken,
   };
-  // Precedence (lowest → highest): passthrough → agent-level env_vars → per-session env_vars → required base.
-  const rawAgentEnvVars =
+  // Precedence (lowest → highest): passthrough → per-session env_vars → required base.
+  // NOTE: agent.env_vars (the long-lived per-agent secrets) are intentionally
+  // OMITTED from the harness env — vault holds the real values and writes
+  // KEY=stub_… into /lap-shared/env, which the harness entrypoint sources.
+  // Per-session env_vars stay direct (short-lived overrides, out of scope
+  // for the stub model).
+  const merged: Record<string, string> = {
+    ...env.containerEnvPassthrough,
+    ...(env_vars ?? {}),
+    ...base,
+    // Route outbound HTTPS through the in-pod vault sidecar so it can swap
+    // stubs for real secrets at egress. Vault's CA is baked into the
+    // harness image's system trust store at build time, which covers
+    // git/curl/python/go/ruby. Node fetch and SEA binaries read
+    // NODE_EXTRA_CA_CERTS, not the OS store — point them at the bundle.
+    HTTPS_PROXY: "http://127.0.0.1:14322",
+    NO_PROXY: "localhost,127.0.0.1,.svc.cluster.local,.svc,.cluster.local",
+    NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+    VAULT_ENABLED: "true",
+  };
+  return Object.entries(merged).map(([name, value]) => ({ name, value }));
+}
+
+// Sidecar env. Each entry from the agent's encrypted env_vars surfaces as
+// REAL_<KEY> here — vault holds the real value while the harness only ever
+// sees a freshly minted stub.
+function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }> {
+  const { agent } = opts;
+  const raw =
     agent.env_vars &&
     typeof agent.env_vars === "object" &&
     !Array.isArray(agent.env_vars)
       ? (agent.env_vars as Record<string, string>)
       : {};
-  const agentEnvVars = Object.fromEntries(
-    Object.entries(rawAgentEnvVars).map(([k, v]) => [k, decrypt(v)]),
-  );
-  const merged: Record<string, string> = {
-    ...env.containerEnvPassthrough,
-    ...agentEnvVars,
-    ...(env_vars ?? {}),
-    ...base,
-  };
-  return Object.entries(merged).map(([name, value]) => ({ name, value }));
+  return Object.entries(raw).map(([k, v]) => ({ name: `REAL_${k}`, value: decrypt(v) }));
 }
 
 // ---------------------------------------------------------------------------
@@ -882,20 +917,9 @@ export async function probeK8s(): Promise<{ ok: true } | { ok: false; error: str
 const DEFAULT_VAULT_PORT = 14322;
 const DEFAULT_VAULT_FETCH_TIMEOUT_MS = 5_000;
 
-export interface VaultInterceptionFingerprint {
-  stub: string;
-  credential: string;
-  real_tail: string;
-}
-
-export interface VaultInterception {
-  timestamp: string;
-  method: string;
-  host: string;
-  path: string;
-  stubs_swapped: string[];
-  real_value_fingerprint: VaultInterceptionFingerprint[];
-}
+// Re-export so existing imports (`import { VaultInterception } from "@/server/k8s"`)
+// keep working. The canonical definitions live in `@/lib/vault-types`.
+export type { VaultInterception, VaultInterceptionFingerprint };
 
 async function podIPFor(task_arn: string): Promise<string | null> {
   try {
@@ -923,8 +947,12 @@ export async function fetchVaultInterceptions(
   // IPv6 pod IPs need brackets in the URL. IPv4 passes through unchanged.
   const hostPart = ip.includes(":") ? `[${ip}]` : ip;
   const url = `http://${hostPart}:${port}/interceptions`;
+  // Shared secret — recomputed identically inside the vault sidecar from
+  // its own pod name (HOSTNAME) and the same MASTER_KEY. Random cluster
+  // pods cannot derive this without holding the master key.
   const res = await fetch(url, {
     method: "GET",
+    headers: { "x-vault-inspect-token": vaultInspectToken(task_arn) },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
