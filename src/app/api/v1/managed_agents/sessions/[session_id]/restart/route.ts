@@ -2,8 +2,9 @@
  * POST /api/v1/managed_agents/sessions/[session_id]/restart
  *
  * Respawns a Fargate task for a dead/failed session and replays the
- * persisted opencode thread (Session.history, populated after every send
- * by the /message route) as the new harness session's first user message.
+ * persisted opencode thread (read from the append-only session_event log,
+ * populated after every send by the /message route) as the new harness
+ * session's first user message.
  *
  * Why a restart instead of a brand-new session: the row id, agent linkage,
  * and any out-of-band references (UI URLs, audit trail) stay stable, and
@@ -43,11 +44,11 @@ import {
   harnessCreateSession,
   harnessSendMessage,
 } from "@/server/harness";
+import { listEvents } from "@/server/sessionEvents";
 import {
   HttpError,
   httpError,
   toApiSession,
-  type HarnessMessage,
   type HarnessMessageResponse,
 } from "@/server/types";
 
@@ -82,9 +83,12 @@ export async function POST(req: Request, ctx: RouteContext) {
     }
 
     const agent = row.agent;
-    const previousHistory = Array.isArray(row.history)
-      ? (row.history as unknown as HarnessMessage[])
-      : null;
+    // Pull the full message log for this session from session_event. Each
+    // row's payload is a HarnessMessage emitted by the harness on the prior
+    // pod, so feeding it to formatHistoryAsText() reproduces the exact text
+    // the model needs to resume context. Empty list → no replay, fresh pod
+    // starts with just the system prompt.
+    const previousHistory = await listEvents(session_id);
 
     // Best-effort: try to stop the old task before we forget its ARN. If it's
     // already stopped or the call fails for any reason, swallow — leaving an
@@ -146,7 +150,7 @@ export async function POST(req: Request, ctx: RouteContext) {
       });
 
       let response: HarnessMessageResponse | null = null;
-      if (previousHistory && previousHistory.length > 0) {
+      if (previousHistory.length > 0) {
         const historyText = formatHistoryAsText(previousHistory);
         response = await harnessSendMessage({
           sandbox_url,
