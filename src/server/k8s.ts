@@ -751,6 +751,12 @@ export async function waitRunningGetUrl(
     // env.CONTAINER_PORT is already a number (coerced in env.ts, default 4096).
     // This matches what buildContainerEnv injects as PORT into the Sandbox pod.
     const containerPort = agent.container_port ?? env.CONTAINER_PORT;
+    // Only poll the Events API after the pod has been non-Running for at least
+    // CNI_CHECK_AFTER_TICKS ticks. Avoids hammering the apiserver on every
+    // 200ms tick during normal startup; CNI exhaustion is detectable within
+    // a few seconds anyway since the kubelet emits the event immediately.
+    const CNI_CHECK_AFTER_TICKS = 5; // ~1s at POLL_RUNNING_INTERVAL_MS=200
+    let tick = 0;
     while (Date.now() < deadline) {
       const { phase, reason, containerReason, exitCode } = await readPodPhase(task_arn);
       if (phase === "Failed") throw new Error(`pod ${task_arn} failed: ${reason ?? "?"}`);
@@ -762,10 +768,11 @@ export async function waitRunningGetUrl(
       if (phase === "Running") {
         return inClusterSandboxUrl(task_arn, containerPort);
       }
-      if (phase !== "Failed" && await hasCniExhaustionEvent(task_arn)) {
+      if (phase !== "Failed" && tick >= CNI_CHECK_AFTER_TICKS && await hasCniExhaustionEvent(task_arn)) {
         throw new Error(`pod ${task_arn} CNI IP exhaustion: node has no available IPs (FailedCreatePodSandBox)`);
       }
       lastReason = `phase=${phase ?? "?"} (in-cluster)`;
+      tick++;
       await sleep(POLL_RUNNING_INTERVAL_MS);
     }
     throw new Error(`sandbox ${task_arn} never reached Running within ${timeout_ms}ms (last: ${lastReason})`);
@@ -773,6 +780,8 @@ export async function waitRunningGetUrl(
   // Out-of-cluster: existing NodePort path follows...
 
   let nodePort: number | null = null;
+  let tick = 0;
+  const CNI_CHECK_AFTER_TICKS = 5;
 
   while (Date.now() < deadline) {
     if (nodePort === null) nodePort = await readNodePort(task_arn);
@@ -787,10 +796,11 @@ export async function waitRunningGetUrl(
       const host = await resolveNodeHost();
       return `http://${host}:${nodePort}`;
     }
-    if (phase !== "Failed" && await hasCniExhaustionEvent(task_arn)) {
+    if (phase !== "Failed" && tick >= CNI_CHECK_AFTER_TICKS && await hasCniExhaustionEvent(task_arn)) {
       throw new Error(`pod ${task_arn} CNI IP exhaustion: node has no available IPs (FailedCreatePodSandBox)`);
     }
     lastReason = `phase=${phase ?? "?"} nodePort=${nodePort ?? "?"}`;
+    tick++;
     await sleep(POLL_RUNNING_INTERVAL_MS);
   }
 

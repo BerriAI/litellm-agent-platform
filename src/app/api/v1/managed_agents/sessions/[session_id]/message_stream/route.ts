@@ -36,9 +36,10 @@ import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import {
   expandMessage,
-  HarnessHttpError,
   harnessOpenEventStream,
   harnessPromptAsync,
+  isDeadSessionError,
+  isHardConnectFailure,
 } from "@/server/harness";
 import { safeStopTask } from "@/server/reconcile";
 import { invalidateSession } from "@/server/sessionCache";
@@ -62,40 +63,6 @@ interface RouteContext {
 // connection forever. After this we send `error` and tear down.
 const STREAM_MAX_DURATION_MS = 600_000;
 
-const HARD_CONNECT_CODES = new Set([
-  "UND_ERR_CONNECT_TIMEOUT",
-  "ECONNREFUSED",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-]);
-
-function isHardConnectFailure(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const e = err as { code?: unknown; cause?: unknown };
-  if (typeof e.code === "string" && HARD_CONNECT_CODES.has(e.code)) return true;
-  const cause = e.cause;
-  if (cause && typeof cause === "object") {
-    const c = (cause as { code?: unknown }).code;
-    if (typeof c === "string" && HARD_CONNECT_CODES.has(c)) return true;
-  }
-  return false;
-}
-
-// Detects a 404 where the harness reports the session ID is unknown.
-// This happens when a NodePort is reused by a different pod after the original
-// pod dies — the new harness has no record of the old harness_session_id.
-// Treating it as dead (same as a hard connect failure) lets the user restart.
-function isDeadSessionError(err: unknown): boolean {
-  if (!(err instanceof HarnessHttpError)) return false;
-  if (err.status !== 404) return false;
-  try {
-    return (JSON.parse(err.body) as { error?: string }).error === "not found";
-  } catch {
-    return false;
-  }
-}
 
 interface BusEvent {
   id?: string;

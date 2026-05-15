@@ -36,6 +36,40 @@ export class HarnessHttpError extends Error {
   }
 }
 
+const HARD_CONNECT_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+export function isHardConnectFailure(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: unknown; cause?: unknown };
+  if (typeof e.code === "string" && HARD_CONNECT_CODES.has(e.code)) return true;
+  const cause = e.cause;
+  if (cause && typeof cause === "object") {
+    const c = (cause as { code?: unknown }).code;
+    if (typeof c === "string" && HARD_CONNECT_CODES.has(c)) return true;
+  }
+  return false;
+}
+
+// 404 + {"error":"not found"} from the harness means the harness_session_id
+// is unknown — happens when a NodePort is reused by a different pod after
+// the original pod dies. Treat it as dead so the user can /restart.
+export function isDeadSessionError(err: unknown): boolean {
+  if (!(err instanceof HarnessHttpError)) return false;
+  if (err.status !== 404) return false;
+  try {
+    return (JSON.parse(err.body) as { error?: string }).error === "not found";
+  } catch {
+    return false;
+  }
+}
+
 export function expandMessage(
   text?: string,
   parts?: HarnessMessagePart[],
