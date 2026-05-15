@@ -2,7 +2,9 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, FileText, Loader2, Plus, Trash2, Upload, X } from "lucide-react";
+import { Check, FileText, Loader2, Pencil, Plus, Trash2, Upload, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -54,6 +56,8 @@ export default function NewAgentPage() {
   const [activeTemplateTab, setActiveTemplateTab] = useState<"overview" | "skill" | "prompt">("overview");
   // Per-template skill edits — keyed by template id
   const [skillEdits, setSkillEdits] = useState<Record<string, string>>({});
+  // Per-template skill edit mode — false = rendered preview, true = raw textarea
+  const [skillEditMode, setSkillEditMode] = useState<Record<string, boolean>>({});
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
   const currentSkill = selectedTemplate
@@ -353,7 +357,7 @@ export default function NewAgentPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-8">
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <h1 className="text-[22px] font-semibold tracking-tight">New Agent</h1>
 
       {/* Template strip — only shown when templates exist */}
@@ -405,104 +409,11 @@ export default function NewAgentPage() {
             ))}
           </div>
 
-          {/* Template detail — tools/skill/prompt tabs, only for non-blank */}
-          {selectedTemplate && (
-            <Card className="overflow-hidden">
-              <div className="flex border-b text-[13px]">
-                {(["overview", "skill", "prompt"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTemplateTab(tab)}
-                    className={cn(
-                      "px-4 py-2 font-medium capitalize transition-colors hover:text-foreground",
-                      activeTemplateTab === tab
-                        ? "border-b-2 border-foreground text-foreground"
-                        : "text-muted-foreground",
-                    )}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-              <CardContent className="pt-4">
-                {activeTemplateTab === "overview" && (
-                  <div className="space-y-3 text-[13px]">
-                    <div>
-                      <p className="mb-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">Tools</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {selectedTemplate.tools.map((tool) => (
-                          <span key={tool} className="rounded border border-border bg-muted px-2 py-0.5 font-mono text-[12px]">
-                            {tool}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="mb-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">Skill</p>
-                      <div className="flex items-center gap-2">
-                        <span className="rounded border border-border bg-muted px-2 py-0.5 font-mono text-[12px]">
-                          {selectedTemplate.skill_name}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setActiveTemplateTab("skill")}
-                          className="text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                        >
-                          Edit →
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {activeTemplateTab === "skill" && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[13px] font-semibold">{selectedTemplate.skill_name}</p>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSkillEdits((prev) => {
-                            const next = { ...prev };
-                            delete next[selectedTemplate.id];
-                            return next;
-                          })
-                        }
-                        className="text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                      >
-                        Reset
-                      </button>
-                    </div>
-                    <Textarea
-                      value={currentSkill}
-                      onChange={(e) =>
-                        setSkillEdits((prev) => ({
-                          ...prev,
-                          [selectedTemplate.id]: e.target.value,
-                        }))
-                      }
-                      className="min-h-[240px] font-mono text-[12px]"
-                      spellCheck={false}
-                    />
-                    <p className="text-[11px] text-muted-foreground">
-                      Edits are local to this agent — template is unchanged.
-                    </p>
-                  </div>
-                )}
-                {activeTemplateTab === "prompt" && (
-                  <Textarea
-                    value={selectedTemplate.prompt}
-                    readOnly
-                    className="min-h-[120px] text-[13px] opacity-70"
-                  />
-                )}
-              </CardContent>
-            </Card>
-          )}
         </div>
       )}
 
-      <Card className="mt-5">
+      <div className={cn("mt-5", selectedTemplate && "grid grid-cols-[1fr,440px] items-start gap-6")}>
+        <Card>
         <CardHeader className="sr-only">
           <CardTitle>New Agent</CardTitle>
           <CardDescription>
@@ -956,7 +867,131 @@ export default function NewAgentPage() {
             </div>
           </form>
         </CardContent>
-      </Card>
+        </Card>
+
+        {selectedTemplate && (
+          <div className="sticky top-6">
+            <Card className="overflow-hidden">
+              <div className="flex border-b text-[13px]">
+                {(["overview", "skill", "prompt"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTemplateTab(tab)}
+                    className={cn(
+                      "px-4 py-2 font-medium capitalize transition-colors hover:text-foreground",
+                      activeTemplateTab === tab
+                        ? "border-b-2 border-foreground text-foreground"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+              <CardContent className="pt-4">
+                {activeTemplateTab === "overview" && (
+                  <div className="space-y-3 text-[13px]">
+                    <div>
+                      <p className="mb-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">Tools</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedTemplate.tools.map((tool) => (
+                          <span key={tool} className="rounded border border-border bg-muted px-2 py-0.5 font-mono text-[12px]">
+                            {tool}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="mb-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">Skill</p>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded border border-border bg-muted px-2 py-0.5 font-mono text-[12px]">
+                          {selectedTemplate.skill_name}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="View skill details"
+                          onClick={() => setActiveTemplateTab("skill")}
+                          className="text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        >
+                          View →
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {activeTemplateTab === "skill" && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[13px] font-semibold">{selectedTemplate.skill_name}</p>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSkillEditMode((prev) => ({
+                              ...prev,
+                              [selectedTemplate.id]: !prev[selectedTemplate.id],
+                            }))
+                          }
+                          className="flex items-center gap-1 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        >
+                          <Pencil className="h-3 w-3" aria-hidden="true" />
+                          {skillEditMode[selectedTemplate.id] ? "Preview" : "Edit"}
+                        </button>
+                        {skillEdits[selectedTemplate.id] !== undefined && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSkillEdits((prev) => {
+                                const next = { ...prev };
+                                delete next[selectedTemplate.id];
+                                return next;
+                              })
+                            }
+                            className="text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {skillEditMode[selectedTemplate.id] ? (
+                      <Textarea
+                        value={currentSkill}
+                        onChange={(e) =>
+                          setSkillEdits((prev) => ({
+                            ...prev,
+                            [selectedTemplate.id]: e.target.value,
+                          }))
+                        }
+                        className="min-h-[400px] font-mono text-[12px]"
+                        spellCheck={false}
+                      />
+                    ) : (
+                      <div className="prose prose-sm dark:prose-invert max-w-none overflow-y-auto rounded-md border bg-muted/30 px-4 py-3 text-[13px] [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {currentSkill}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      Edits are local to this agent — template is unchanged.
+                    </p>
+                  </div>
+                )}
+                {activeTemplateTab === "prompt" && (
+                  <Textarea
+                    aria-label="System prompt preview"
+                    value={selectedTemplate.prompt}
+                    readOnly
+                    className="min-h-[400px] text-[13px] opacity-70"
+                  />
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
