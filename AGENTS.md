@@ -4,6 +4,20 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
+# Vault sidecar — key exposure rules
+
+Every sandbox pod runs a vault sidecar that MITMs all HTTPS egress via `HTTPS_PROXY`/`HTTP_PROXY=http://127.0.0.1:14322`. Understand the two paths before touching `buildContainerEnv` or `buildVaultEnv` in `src/server/k8s.ts`:
+
+| Path | How | Harness sees | Wire carries |
+|---|---|---|---|
+| `buildContainerEnv` | direct string in env | **real value** | real value |
+| `buildVaultEnv` as `REAL_<KEY>` | vault stubs at startup | `stub_xxx` | real value (swapped by vault) |
+
+**Rules:**
+- Platform secrets (`LITELLM_API_KEY`, any API key the harness must not display) → `buildVaultEnv` as `REAL_<KEY>`. Never put them in `buildContainerEnv`.
+- After merging `containerEnvPassthrough` into the harness env, **explicitly `delete merged["KEY"]`** for any key that must be vault-stubbed. `CONTAINER_ENV_<KEY>` server vars flow through passthrough and will silently reintroduce the real value if you only omit the key from `base`.
+- Setting `HTTP_PROXY` or `HTTPS_PROXY` to point at vault requires the corresponding handler in `vault/src/server.ts`. Adding a proxy env var without a server handler returns 404 to the client — not a block, not a swap, just a broken proxy.
+
 # Harness images
 
 Each harness type has its own container image configured via env vars. Set these in the `litellm-env` k8s secret (or `.env` for local dev):
