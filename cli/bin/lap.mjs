@@ -28,6 +28,98 @@ const CONFIG = path.join(os.homedir(), ".lap", "config.json");
 // The new session.tty_url field (planned) will make this unnecessary.
 const TTY_FALLBACK = process.env.LAP_TTY_FALLBACK ?? "";
 
+const PKG_VERSION = (() => {
+  try {
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    return JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8")).version ?? "?";
+  } catch { return "?"; }
+})();
+
+// ANSI helpers. `vlen` strips escapes for visible-width math so the banner
+// and picker can right-align metadata next to colored cells without their
+// width math getting thrown off by zero-width control sequences.
+const vlen = s => s.replace(/\x1b\[[0-9;]*m/g, "").length;
+const padTo = (s, n) => s + " ".repeat(Math.max(0, n - vlen(s)));
+const ansi = {
+  reset: "\x1b[0m", bold: s => `\x1b[1m${s}\x1b[0m`, dim: s => `\x1b[2m${s}\x1b[0m`,
+  cyan: s => `\x1b[36m${s}\x1b[0m`, red: s => `\x1b[31m${s}\x1b[0m`,
+  green: s => `\x1b[32m${s}\x1b[0m`, yellow: s => `\x1b[33m${s}\x1b[0m`,
+  blueBold: s => `\x1b[1;94m${s}\x1b[0m`,
+};
+
+function renderBanner() {
+  const cfg = loadConfig();
+  const where = cfg?.base ?? "(not configured)";
+  const { blueBold: b, bold, dim } = ansi;
+  // ANSI-shaded "LITELLM" block-letter wordmark + a smaller 2-row
+  // "AGENT PLATFORM" wordmark in the same bright blue. Full banner is
+  // ~9 lines — only shown on `lap` (wizard) and `lap login`, not on
+  // fast paths like `lap <name>`.
+  const lines = [
+    "",
+    `  ${b("██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗")}`,
+    `  ${b("██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║")}`,
+    `  ${b("██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║")}`,
+    `  ${b("██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║")}`,
+    `  ${b("███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║")}`,
+    `  ${b("╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝")}`,
+    "",
+    `  ${b("▄▀█ █▀▀ █▀▀ █▄ █ ▀█▀   █▀█ █   ▄▀█ ▀█▀ █▀▀ █▀█ █▀█ █▄ ▄█")}`,
+    `  ${b("█▀█ █▄█ █▄▄ █ ▀█  █    █▀▀ █▄▄ █▀█  █  █▀  █▄█ █▀▄ █ ▀ █")}`,
+    "",
+    `              ${dim(`lap-cli v${PKG_VERSION}  ${where}`)}`,
+    "",
+  ];
+  process.stdout.write(lines.join("\n") + "\n");
+}
+
+// Arrow-key picker over `items`. `render(item, isHighlighted)` returns the
+// row body (no trailing newline). Returns the chosen item, or null on Esc /
+// Ctrl-C / q. Single-item lists are returned without prompting.
+function pickFromList(items, render) {
+  if (items.length === 0) return Promise.resolve(null);
+  if (items.length === 1) return Promise.resolve(items[0]);
+  let cur = 0;
+  const draw = () => {
+    for (let i = 0; i < items.length; i++) {
+      const marker = i === cur ? ansi.cyan("▶ ") : "  ";
+      process.stdout.write(marker + render(items[i], i === cur) + "\n");
+    }
+  };
+  const erase = () => {
+    readline.moveCursor(process.stdout, 0, -items.length);
+    for (let i = 0; i < items.length; i++) {
+      readline.clearLine(process.stdout, 0);
+      readline.moveCursor(process.stdout, 0, 1);
+    }
+    readline.moveCursor(process.stdout, 0, -items.length);
+  };
+  return new Promise((resolve) => {
+    readline.emitKeypressEvents(process.stdin);
+    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+    process.stdin.resume();
+    const cleanup = () => {
+      if (process.stdin.isTTY) process.stdin.setRawMode(false);
+      process.stdin.off("keypress", onKey);
+      process.stdin.pause();
+    };
+    const onKey = (_, key) => {
+      if (!key) return;
+      if (key.name === "up" || key.name === "k") {
+        cur = (cur - 1 + items.length) % items.length; erase(); draw();
+      } else if (key.name === "down" || key.name === "j") {
+        cur = (cur + 1) % items.length; erase(); draw();
+      } else if (key.name === "return") {
+        cleanup(); resolve(items[cur]);
+      } else if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) {
+        cleanup(); resolve(null);
+      }
+    };
+    process.stdin.on("keypress", onKey);
+    draw();
+  });
+}
+
 function loadConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG, "utf8")); } catch { return null; }
 }
@@ -58,8 +150,9 @@ function ask(prompt, { hidden = false } = {}) {
   });
 }
 
-async function login() {
-  process.stdout.write("\n  \x1b[1mSet up the agent platform\x1b[0m\n");
+async function login({ banner = true } = {}) {
+  if (banner) renderBanner();
+  process.stdout.write("  \x1b[1mSet up the agent platform\x1b[0m\n");
   process.stdout.write("  \x1b[2mSaved to ~/.lap/config.json (chmod 0600)\x1b[0m\n\n");
   const base = (await ask("  Agent platform URL: ")).trim().replace(/\/+$/, "");
   const key  = (await ask("  Master key:         ", { hidden: true })).trim();
@@ -67,6 +160,15 @@ async function login() {
   saveConfig({ base, key });
   console.log(`  \x1b[32m✓ saved to ${CONFIG}\x1b[0m\n`);
   return { base, key };
+}
+
+// Backend exposes `supports_tui` (derived from TUI_HARNESSES). Fall back to
+// a client-side allowlist when the field is missing so a fresh CLI still
+// works against a platform that hasn't shipped the field yet.
+const CLIENT_TUI_HARNESSES = new Set(["claude-code", "codex"]);
+function isTuiAgent(a) {
+  if (typeof a.supports_tui === "boolean") return a.supports_tui;
+  return CLIENT_TUI_HARNESSES.has(a.harness_id);
 }
 
 async function openAgent(args) {
@@ -280,16 +382,17 @@ function help() {
   \x1b[1mlap\x1b[0m — LiteLLM Agent Platform CLI
 
   \x1b[2mUSAGE\x1b[0m
+    lap                             interactive wizard (login + agent picker)
     lap <agent-name>                open the agent's TUI in a sandbox
     lap --agent <name>              same as above (flag form)
-    lap agents                      list agents on the platform
+    lap agents                      list agents on the platform ([tui] = compatible)
     lap login                       set base URL + master key (one-time)
     lap config                      show current config
     lap logout                      delete config
 
   \x1b[2mEXAMPLE\x1b[0m
-    lap login
-    lap refactor-bot
+    lap                             # first run — banner, login, pick
+    lap refactor-bot                # fast path once you know the name
 
   Config:  ${CONFIG}
 `);
@@ -306,8 +409,51 @@ async function agentsCmd() {
   for (const a of data) {
     const name = (a.name ?? "<unnamed>").padEnd(28);
     const harness = (a.harness_id ?? "?").padEnd(20);
-    console.log(`  ${name} \x1b[2m${harness} ${a.id.slice(0,8)}\x1b[0m`);
+    const tag = isTuiAgent(a) ? ansi.cyan("[tui]") : ansi.dim("     ");
+    console.log(`  ${name} \x1b[2m${harness}\x1b[0m ${tag} \x1b[2m${a.id.slice(0,8)}\x1b[0m`);
   }
+}
+
+// `lap` with no args: banner → ensure login → pick a TUI-compatible agent
+// → hand off to openAgent. The picker filters to `supports_tui` because the
+// CLI can only attach to PTY-exposing harnesses; non-TUI agents would just
+// fail at WS-connect time with a confusing message.
+async function wizard() {
+  renderBanner();
+  let cfg = loadConfig();
+  if (!cfg) {
+    process.stdout.write(`  ${ansi.yellow("No agent platform configured — let's set one up.")}\n\n`);
+    cfg = await login({ banner: false });
+  }
+  process.stdout.write(`  ${ansi.dim("→ fetching agents…")}\n`);
+  let agents;
+  try {
+    const r = await fetch(`${cfg.base}/api/v1/managed_agents/agents`, {
+      headers: { authorization: `Bearer ${cfg.key}` },
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    ({ data: agents } = await r.json());
+  } catch (e) {
+    console.error(`  ${ansi.red(`✗ agent list failed: ${e.message}`)}`);
+    process.exit(1);
+  }
+  const tui = agents.filter(isTuiAgent);
+  if (tui.length === 0) {
+    console.error(`  ${ansi.red("✗ no TUI-compatible agents on this platform.")}`);
+    console.error(`  ${ansi.dim(`TUI requires harness ${[...CLIENT_TUI_HARNESSES].join(" or ")} — visit ${cfg.base}/agents to create one.`)}`);
+    process.exit(1);
+  }
+  // Reposition above the "fetching agents…" line so the picker draws cleanly.
+  readline.moveCursor(process.stdout, 0, -1);
+  readline.clearLine(process.stdout, 0);
+  process.stdout.write(`  ${ansi.bold("Pick an agent")}  ${ansi.dim("↑/↓ to move, Enter to open, q to cancel")}\n\n`);
+  const picked = await pickFromList(tui, (a) => {
+    const name = (a.name ?? "<unnamed>").padEnd(28);
+    return `${name} ${ansi.dim(`${a.harness_id ?? "?"}  ${a.id.slice(0, 8)}`)}`;
+  });
+  if (!picked) { console.log(`  ${ansi.dim("cancelled.")}`); process.exit(0); }
+  process.stdout.write("\n");
+  await openAgent([picked.name]);
 }
 
 async function main() {
@@ -316,7 +462,7 @@ async function main() {
   // Subcommands are reserved keywords. Anything else is treated as an agent
   // name shorthand for `lap --agent <name>`.
   switch (cmd) {
-    case undefined:
+    case undefined: await wizard(); break;
     case "-h":
     case "--help":
     case "help":   help(); break;
