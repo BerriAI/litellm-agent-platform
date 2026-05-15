@@ -21,10 +21,15 @@ export function ModelPicker({ value, onChange, disabled }: ModelPickerProps) {
     listModels().catch(() => [] as ModelRow[]).then(setModels);
   }, []);
 
-  const sorted = useMemo(
-    () => [...models].sort((a, b) => a.id.localeCompare(b.id)),
-    [models],
-  );
+  const sorted = useMemo(() => {
+    const seen = new Set<string>();
+    const deduped = models.filter((m) => {
+      if (seen.has(m.id)) return false;
+      seen.add(m.id);
+      return true;
+    });
+    return deduped.sort((a, b) => a.id.localeCompare(b.id));
+  }, [models]);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return sorted;
