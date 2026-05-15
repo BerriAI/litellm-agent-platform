@@ -298,6 +298,7 @@ async function buildContainerEnv(
     // git/curl/python/go/ruby. Node fetch and SEA binaries read
     // NODE_EXTRA_CA_CERTS, not the OS store — point them at the bundle.
     HTTPS_PROXY: "http://127.0.0.1:14322",
+    HTTP_PROXY: "http://127.0.0.1:14322",
     NO_PROXY: "localhost,127.0.0.1,.svc.cluster.local,.svc,.cluster.local",
     NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
     VAULT_ENABLED: "true",

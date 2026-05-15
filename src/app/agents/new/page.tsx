@@ -41,6 +41,8 @@ interface SandboxTemplate {
   name: string;
   repo_url?: string;
   env_vars?: Record<string, string>;
+  allow_out?: string[];
+  deny_out?: string[];
 }
 
 export default function NewAgentPage() {
