@@ -6,7 +6,8 @@ LiteLLM Agent Platform is self-hosted infrastructure for running coding agents â
 
 **Learn more in the [docs](./docs)**.
 
-<img width="1997" height="1219" alt="Xnapper-2026-05-08-19 10 50" src="https://github.com/user-attachments/assets/c0c2c2f8-d9e2-4821-b73a-e3971dac5169" />
+<img width="936" height="720" alt="LAP_CC" src="https://github.com/user-attachments/assets/9a0e6d92-61b0-405e-aff9-1a0ff4d152c6" />
+
 
 ## Get started
 
