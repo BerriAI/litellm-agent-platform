@@ -111,6 +111,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/package.json /app/package-lock.js
 COPY --from=builder --chown=nextjs:nodejs /app/src/server ./src/server
 COPY --from=builder --chown=nextjs:nodejs /app/src/worker ./src/worker
 
+# Agent templates — loaded at runtime by src/server/templates.ts via
+# readFileSync(process.cwd() + "/agent-templates"). Not picked up by
+# Next.js file tracing (dynamic path), so must be copied explicitly.
+COPY --from=builder --chown=nextjs:nodejs /app/agent_templates.json ./agent_templates.json
+COPY --from=builder --chown=nextjs:nodejs /app/agent-templates ./agent-templates
+
 # TCP proxy that fronts the Next.js standalone server and pipes /tty WS
 # upgrades directly to cluster-internal sandbox pods (IN_CLUSTER mode).
 COPY --chown=nextjs:nodejs server-proxy.mjs ./server-proxy.mjs
