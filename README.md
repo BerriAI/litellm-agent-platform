@@ -2,71 +2,40 @@
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
-**Self-hosted platform for running coding agents in isolated sandboxes.**
+LiteLLM Agent Platform is self-hosted infrastructure for running coding agents — Claude Code, Codex, anything — inside isolated sandboxes with a credential vault, so agents can run with bypass-permissions on without ever seeing your real keys. Use it from the `lap` CLI in your terminal, the web UI, or call the API directly.
 
-Run Claude Code, Codex, or any coding-agent harness in its own Kubernetes sandbox. A vault proxy sits in front of each sandbox and swaps stub credentials for real ones on outbound calls — the agent process never sees your raw credentials.
+**Learn more in the [docs](./docs)**.
 
 <img width="1997" height="1219" alt="Xnapper-2026-05-08-19 10 50" src="https://github.com/user-attachments/assets/c0c2c2f8-d9e2-4821-b73a-e3971dac5169" />
 
----
+## Get started
 
-## Why this exists
+> [!NOTE]
+> The `lap` CLI talks to a running instance of LiteLLM Agent Platform. To self-host the platform itself, jump to [Self-hosting](#self-hosting).
 
-In most enterprises you can't just run `claude --dangerously-skip-permissions` on a corporate laptop. IT won't approve it. So developers babysit a permission popup every two minutes instead of shipping.
+1. Install the `lap` CLI:
 
-Run the agent inside a sandbox where the env contains only stub credentials and the vault swaps them at egress, and bypass-permissions becomes safe to enable.
+    ```bash
+    git clone https://github.com/BerriAI/litellm-agent-platform.git
+    cd litellm-agent-platform/cli && npm install
+    ln -sf "$PWD/bin/lap.mjs" ~/.local/bin/lap
+    ```
 
-## How it works — developer flow
+2. Point it at your platform:
 
-A developer never deals with Kubernetes or the vault. They install one CLI and run one command.
+    ```bash
+    lap login
+    ```
 
-### 1. Install the `lap` CLI
+3. Open a sandbox:
 
-```bash
-git clone https://github.com/BerriAI/litellm-agent-platform.git
-cd litellm-agent-platform/cli
-npm install
-chmod +x bin/lap.mjs
-ln -sf "$PWD/bin/lap.mjs" ~/.local/bin/lap
-```
+    ```bash
+    lap claude-code-cli1
+    ```
 
-### 2. Log in to your platform
+That spins up a fresh Kubernetes pod running Claude Code, attaches your local terminal to its TTY over a WebSocket, and drops you straight into the agent. The pod's env contains only stub credentials (e.g. `GITHUB_TOKEN=stub_github_a8f1`); the vault swaps them for real keys on every outbound TLS connection. Press **Ctrl-D** to detach; the session stays alive for 24h. See [docs/lap-cli.md](docs/lap-cli.md) for the full CLI.
 
-```bash
-lap login
-#   Agent platform URL: https://lap.acme.dev
-#   Master key:         ••••••••••••••••
-#   ✓ saved to ~/.lap/config.json
-```
-
-### 3. List the agents your team has configured
-
-```bash
-lap agents
-```
-
-### 4. Open a sandbox
-
-```bash
-lap claude-code-cli1
-```
-
-That command spins up a fresh Kubernetes pod running Claude Code, attaches your local terminal to its TTY over a WebSocket, and drops you straight into the agent. Same feel as `ssh` — your iTerm / tmux / wezterm stays exactly where it is. Press **Ctrl-D** to detach; the session stays alive for 24h and you can reconnect by running `lap <agent>` again.
-
-### What's running in the sandbox
-
-- The actual `claude` CLI under `node-pty`
-- Working tree at `/work/repo`, optionally cloned at boot
-- Credentials in the pod's env are stub placeholders:
-  ```
-  GITHUB_TOKEN=stub_github_a8f1
-  LITELLM_API_KEY=stub_litellm_bb20
-  ```
-  Vault swaps them for the real values inline on every outbound TLS connection. The agent can `echo $GITHUB_TOKEN` all it wants and only get the stub.
-
-Full CLI docs: [docs/lap-cli.md](docs/lap-cli.md).
-
-## Self-hosting the platform
+## Self-hosting
 
 Sandboxes run on Kubernetes via the [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) CRD. Local dev uses [kind](https://kind.sigs.k8s.io/).
 
