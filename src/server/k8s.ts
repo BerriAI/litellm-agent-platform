@@ -308,13 +308,24 @@ async function buildContainerEnv(
     // Route outbound HTTPS through the in-pod vault sidecar so it can swap
     // stubs for real secrets at egress. The vault CA cert is mounted into
     // the harness container at /etc/vault-ca/tls.crt (see volumeMounts below).
-    // git/curl/python/go/ruby trust the OS store (updated at image build time).
-    // Node fetch and SEA binaries (e.g. Claude Code) read NODE_EXTRA_CA_CERTS —
-    // point it at the mounted vault CA so those runtimes trust the proxy too.
+    // Every TLS client's CA-bundle env var points at that file so the
+    // MITM cert verifies across runtimes:
+    //   - NODE_EXTRA_CA_CERTS — Node + SEA binaries (Claude Code). This
+    //     SUPPLEMENTS Node's built-in Mozilla bundle, so non-proxied
+    //     (NO_PROXY) HTTPS to cluster-local services still works.
+    //   - SSL_CERT_FILE / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE / GIT_SSL_CAINFO
+    //     — python (ssl + requests), go, ruby, curl, and git all read these
+    //     and treat them as REPLACEMENT bundles. That's fine here because
+    //     all proxied egress only ever sees the vault cert; NO_PROXY hosts
+    //     bypass the proxy entirely and don't need a real bundle.
     HTTPS_PROXY: "http://127.0.0.1:14322",
     HTTP_PROXY: "http://127.0.0.1:14322",
     NO_PROXY: "localhost,127.0.0.1,.svc.cluster.local,.svc,.cluster.local",
     NODE_EXTRA_CA_CERTS: "/etc/vault-ca/tls.crt",
+    SSL_CERT_FILE: "/etc/vault-ca/tls.crt",
+    REQUESTS_CA_BUNDLE: "/etc/vault-ca/tls.crt",
+    CURL_CA_BUNDLE: "/etc/vault-ca/tls.crt",
+    GIT_SSL_CAINFO: "/etc/vault-ca/tls.crt",
     VAULT_ENABLED: "true",
   };
   // Unconditionally remove LITELLM_API_KEY from the harness env regardless
