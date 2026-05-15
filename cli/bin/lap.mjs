@@ -24,8 +24,9 @@ import { WebSocket } from "ws";
 const CONFIG = path.join(os.homedir(), ".lap", "config.json");
 
 // Optional fallback when the platform returns an in-cluster sandbox_url
-// the local laptop can't reach. Set LAP_TTY_FALLBACK in env to override.
-// The new session.tty_url field (planned) will make this unnecessary.
+// the local laptop can't reach AND doesn't provide session.tty_url
+// (older platforms before the WS proxy landed). New platforms expose
+// session.tty_url and the CLI prefers it automatically.
 const TTY_FALLBACK = process.env.LAP_TTY_FALLBACK ?? "";
 
 function loadConfig() {
@@ -188,15 +189,31 @@ async function openAgent(args) {
   }
   process.stdout.write(" \x1b[32mready\x1b[0m\n");
 
+  // Prefer session.tty_url when the platform provides it — that's a
+  // platform-served route (e.g. /api/v1/managed_agents/sessions/<id>/tty
+  // proxied by server-proxy.mjs) that's reachable over the same public
+  // ingress as the rest of the API. Fall back to sandbox_url + /tty for
+  // older platforms / local dev where the sandbox is directly reachable.
   let wsUrl;
-  if (session.sandbox_url && !session.sandbox_url.includes(".svc.cluster.local")) {
+  if (session.tty_url) {
+    if (/^wss?:\/\//.test(session.tty_url)) {
+      wsUrl = session.tty_url;
+    } else if (/^https?:\/\//.test(session.tty_url)) {
+      wsUrl = session.tty_url.replace(/^http/, "ws");
+    } else {
+      // Relative path — prepend the platform base URL, swap to ws/wss.
+      const baseWs = cfg.base.replace(/^http/, "ws").replace(/\/+$/, "");
+      const suffix = session.tty_url.startsWith("/") ? session.tty_url : `/${session.tty_url}`;
+      wsUrl = baseWs + suffix;
+    }
+  } else if (session.sandbox_url && !session.sandbox_url.includes(".svc.cluster.local")) {
     wsUrl = session.sandbox_url.replace(/^http/, "ws").replace(/\/+$/, "") + "/tty";
   } else if (TTY_FALLBACK) {
     wsUrl = TTY_FALLBACK;
     console.log(`  \x1b[2m(sandbox_url is in-cluster — using LAP_TTY_FALLBACK)\x1b[0m`);
   } else {
-    console.error(`  \x1b[31m✗ session.sandbox_url is in-cluster (${session.sandbox_url}) and no LAP_TTY_FALLBACK set.\x1b[0m`);
-    console.error(`  \x1b[2m  set LAP_TTY_FALLBACK=ws://host:port/tty in your env, or wait for the platform's tty_url field\x1b[0m`);
+    console.error(`  \x1b[31m✗ session.sandbox_url is in-cluster (${session.sandbox_url}) and the platform did not return a tty_url.\x1b[0m`);
+    console.error(`  \x1b[2m  upgrade the platform, or set LAP_TTY_FALLBACK=ws://host:port/tty in your env\x1b[0m`);
     process.exit(1);
   }
   // The harness's verifyClient requires the bearer token; the platform
