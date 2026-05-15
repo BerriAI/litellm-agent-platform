@@ -19,10 +19,13 @@ if [ "${VAULT_ENABLED:-}" = "true" ]; then
     set -a
     . /lap-shared/env
     set +a
-    # Debian's git uses libcurl-gnutls which doesn't auto-discover the system
-    # trust store reliably. Pin it to the bundle file (vault CA is baked in
-    # at image build time).
-    export GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+    # CA-bundle env vars (NODE_EXTRA_CA_CERTS, SSL_CERT_FILE, REQUESTS_CA_BUNDLE,
+    # CURL_CA_BUNDLE, GIT_SSL_CAINFO) are set by the platform (k8s.ts:buildContainerEnv)
+    # to /etc/vault-ca/tls.crt so every TLS client trusts the MITM proxy. Don't
+    # override them here — the previous "bake into system store at build time"
+    # design was never wired up (no harness Dockerfile actually COPYs the CA
+    # in), so pointing tools at /etc/ssl/certs/ca-certificates.crt masked the
+    # real fix and silently broke proxied egress for git/curl/python.
     echo "[entrypoint] vault stubs sourced ($(wc -l </lap-shared/env) keys)"
   fi
 fi
