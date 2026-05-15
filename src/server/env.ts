@@ -18,6 +18,10 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   UI_USERNAME: z.string().min(1),
   MASTER_KEY: z.string().min(8),
+  // Optional internal-user credential pair. When set, Basic Auth with these
+  // values grants agent CRUD access but not sandbox templates (pre-RBAC).
+  INTERNAL_USER_USERNAME: z.string().optional(),
+  INTERNAL_USER_PASSWORD: z.string().optional(),
   K8S_NAMESPACE: z.string().min(1).default("default"),
   K8S_NODE_HOST: z.string().optional().default("host.docker.internal"),
   K8S_IMAGE_PULL_POLICY: z.enum(["Never", "IfNotPresent", "Always"]).default("Never"),

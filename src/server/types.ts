@@ -540,6 +540,14 @@ export interface ServerEnv {
   WARM_POOL_RECENT_AGENT_HOURS: number; // default 24
 
   /**
+   * Optional secondary credential pair for "internal user" access.
+   * When set, Bearer <INTERNAL_USER_PASSWORD> grants agent CRUD access
+   * but not sandbox templates (precursor to full RBAC).
+   */
+  INTERNAL_USER_USERNAME?: string;
+  INTERNAL_USER_PASSWORD?: string;
+
+  /**
    * All process.env entries whose key starts with `CONTAINER_ENV_`, with
    * the prefix stripped. Passed verbatim into every sandbox container's
    * `env[]` at Sandbox CR create time.
@@ -561,7 +569,7 @@ export interface ServerEnv {
  * for the `created_by` audit column — currently fixed to "ui" since v0 is
  * single-tenant.
  */
-export type AuthIdentity = { user_id: string };
+export type AuthIdentity = { user_id: string; role: "admin" | "internal_user" };
 
 // must export:
 //   export function assertAuth(req: Request): AuthIdentity

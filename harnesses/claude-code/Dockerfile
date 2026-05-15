@@ -14,6 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code@latest
 
+# Vault CA: the vault sidecar MITM-proxies all egress HTTPS to swap
+# credential stubs for real values. Bake the CA into the OS trust store so
+# git, curl, and Node (via NODE_EXTRA_CA_CERTS) all trust the proxy TLS.
+COPY vault/ca.crt /etc/ssl/certs/vault.crt
+RUN ln -sf /etc/ssl/certs/vault.crt /usr/local/share/ca-certificates/vault.crt \
+    && update-ca-certificates \
+    && cat /etc/ssl/certs/vault.crt >> /etc/ssl/certs/ca-certificates.crt \
+    && openssl rehash /etc/ssl/certs/
+
 WORKDIR /app
 COPY harnesses/claude-code/package.json ./
 RUN npm install --no-audit --no-fund

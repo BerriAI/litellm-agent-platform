@@ -11,6 +11,7 @@ Exit 0 on pass, 1 on failure.
 """
 import os
 import socket
+import ssl
 import sys
 import urllib.request
 
@@ -61,10 +62,11 @@ FAKE_SESSION = "00000000-0000-0000-0000-000000000000"
 
 def tty_ws_status(token: str) -> str:
     """Send a WebSocket upgrade to the TTY proxy; return the HTTP status line."""
-    s = socket.socket()
-    s.settimeout(10)
+    raw = socket.socket()
+    raw.settimeout(10)
     try:
-        s.connect((host, port))
+        raw.connect((host, port))
+        s = ssl.create_default_context().wrap_socket(raw, server_hostname=host) if port == 443 else raw
         path = f"/api/v1/managed_agents/sessions/{FAKE_SESSION}/tty?token={token}"
         req = (
             f"GET {path} HTTP/1.1\r\n"
@@ -76,7 +78,7 @@ def tty_ws_status(token: str) -> str:
         s.sendall(req.encode())
         return s.recv(256).decode(errors="replace").split("\r\n")[0]
     finally:
-        s.close()
+        raw.close()
 
 
 try:

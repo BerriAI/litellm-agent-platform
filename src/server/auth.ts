@@ -36,15 +36,56 @@ function unauthorized(): Response {
   });
 }
 
+function forbidden(): Response {
+  return new Response(JSON.stringify({ error: "forbidden" }), {
+    status: 403,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
+/**
+ * Accepts `Authorization: Bearer <token>`.
+ *   - token == MASTER_KEY               → admin role (full access)
+ *   - token == INTERNAL_USER_PASSWORD   → internal_user role (agent CRUD only,
+ *                                         no sandbox templates). Client obtains
+ *                                         this token by POSTing username+password
+ *                                         to /api/ui/auth/internal-user.
+ *
+ * Throws a 401 Response if no token matches.
+ */
 export function assertAuth(req: Request): AuthIdentity {
-  const got = req.headers.get("authorization");
-  const expected = expectedBearer();
-  if (got === null) throw unauthorized();
-  const a = Buffer.from(got);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) throw unauthorized();
-  if (!timingSafeEqual(a, b)) throw unauthorized();
-  return { user_id: "ui" };
+  const header = req.headers.get("authorization");
+  if (header === null) throw unauthorized();
+  if (!header.startsWith("Bearer ")) throw unauthorized();
+
+  if (safeEqual(header, expectedBearer())) {
+    return { user_id: "ui", role: "admin" };
+  }
+
+  const username = env.INTERNAL_USER_USERNAME;
+  const password = env.INTERNAL_USER_PASSWORD;
+  if (username && password && safeEqual(header, `Bearer ${password}`)) {
+    return { user_id: username, role: "internal_user" };
+  }
+
+  throw unauthorized();
+}
+
+/**
+ * Like assertAuth but only allows admin role (MASTER_KEY).
+ * Internal users receive 403 Forbidden.
+ */
+export function assertAdminAuth(req: Request): AuthIdentity {
+  const identity = assertAuth(req);
+  if (identity.role !== "admin") throw forbidden();
+  return identity;
 }
 
 /**
@@ -75,5 +116,5 @@ export function assertCookieAuth(req: Request): AuthIdentity {
   const b = Buffer.from(env.MASTER_KEY);
   if (a.length !== b.length) throw unauthorized();
   if (!timingSafeEqual(a, b)) throw unauthorized();
-  return { user_id: "ui" };
+  return { user_id: "ui", role: "admin" };
 }
