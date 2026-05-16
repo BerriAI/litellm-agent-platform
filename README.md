@@ -2,7 +2,7 @@
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
-LiteLLM Agent Platform is self-hosted infrastructure for running coding agents — Claude Code, Codex, anything — inside isolated sandboxes with a credential vault, so agents can run with bypass-permissions on without ever seeing your real keys. Use it from the `lap` CLI in your terminal, the web UI, or call the API directly.
+LiteLLM Agent Platform is self-hosted infrastructure for running coding agents — Claude Code, Codex, Hermes anything — inside isolated sandboxes with a credential vault, so agents can run with bypass-permissions on without ever seeing your real keys. Use it from the `lap` CLI in your terminal, the web UI, or call the API directly.
 
 **Learn more in the [docs](https://docs.litellm-agent-platform.ai/)**.
 
