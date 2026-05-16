@@ -11,6 +11,7 @@
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
+import { validateAgentModel } from "@/server/litellm-validate";
 import { appendSkillBlock } from "@/server/skill-prompt";
 import {
   CreateAgentBody,
@@ -106,6 +107,12 @@ export const POST = wrap(async (req: Request) => {
       error: `unknown harness_id "${harness_id}". Valid: ${[...KNOWN_HARNESSES].join(", ")}`,
     });
   }
+
+  // Reject save if the model isn't actually usable via LiteLLM. The proxy
+  // sometimes advertises dated variants in /v1/models that 404 upstream;
+  // catching it here is much friendlier than letting every spawned
+  // session fail on the first chat message.
+  await validateAgentModel(body.model);
 
   // Resolve attached skills (if any), ownership-check in one query, and
   // append each as a `<!-- skill:<id> -->` block to the prompt. Order is
