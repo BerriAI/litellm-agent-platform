@@ -3,6 +3,8 @@ title: "Hermes TUI"
 description: "Run the Nous Research Hermes Agent CLI inside a managed sandbox and attach to it from your terminal."
 ---
 
+![Hermes Agent CLI attached over the lap TTY](/screenshots/hermes-attach.gif)
+
 The `hermes` harness wraps [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) — a self-improving Python CLI with persistent memory, automated skill creation, and 300+ supported models — inside a sandboxed pod exposed over a WebSocket `/tty` endpoint. The default command is `hermes --tui`, the modern Ink-based interactive UI.
 
 The image clones the upstream repo at a pinned release tag (`v2026.5.16`) and installs into a venv at `/opt/hermes` via `uv`.
