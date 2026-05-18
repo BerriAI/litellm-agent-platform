@@ -19,6 +19,10 @@ spec:
     spec:
       serviceAccountName: {{ include "litellm-agent-platform.serviceAccountName" . }}
       priorityClassName: {{ .Values.priorityClassName }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -30,6 +34,12 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - "npm run worker"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           env:
             # -- Secrets
             - name: MASTER_KEY
@@ -57,21 +67,27 @@ spec:
                 secretKeyRef:
                   name: {{ include "litellm-agent-platform.secretName" . }}
                   key: CONTAINER_ENV_HARNESS_AUTH_TOKEN
+            # -- Config from ConfigMap
+            - name: LITELLM_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: LITELLM_DEFAULT_MODEL
+            - name: PREINSTALLED_GITHUB_REPO
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: PREINSTALLED_GITHUB_REPO
+            - name: WARM_POOL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: WARM_POOL_SIZE
             # -- Non-secret literals
             - name: NODE_ENV
               value: "production"
             - name: UI_USERNAME
               value: {{ .Values.config.username | quote }}
-            - name: LITELLM_DEFAULT_MODEL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm-agent-platform.secretName" . }}
-                  key: LITELLM_DEFAULT_MODEL
-            - name: PREINSTALLED_GITHUB_REPO
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm-agent-platform.secretName" . }}
-                  key: PREINSTALLED_GITHUB_REPO
             # -- K8s sandbox backend
             - name: K8S_NODE_HOST
               value: {{ .Values.k8s.nodeHost | quote }}
@@ -79,21 +95,16 @@ spec:
               value: {{ .Values.k8s.namespace | quote }}
             - name: K8S_NODEPORT_MIN
               valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm-agent-platform.secretName" . }}
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
                   key: K8S_NODEPORT_MIN
             - name: K8S_NODEPORT_MAX
               valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm-agent-platform.secretName" . }}
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
                   key: K8S_NODEPORT_MAX
             - name: K8S_IMAGE_PULL_POLICY
               value: {{ .Values.k8s.imagePullPolicy | quote }}
-            - name: WARM_POOL_SIZE
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm-agent-platform.secretName" . }}
-                  key: WARM_POOL_SIZE
             # -- In-cluster auth
             - name: IN_CLUSTER
               value: "true"
@@ -156,7 +167,10 @@ spec:
             {{- end }}
             {{- if .Values.config.awsRegion }}
             - name: AWS_REGION
-              value: {{ .Values.config.awsRegion | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: AWS_REGION
             {{- end }}
             {{- range $key, $value := .Values.extraEnv }}
             - name: {{ $key }}

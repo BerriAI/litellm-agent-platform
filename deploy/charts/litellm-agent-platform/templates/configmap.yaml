@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "litellm-agent-platform.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "litellm-agent-platform.labels" . | nindent 4 }}
+data:
+  K8S_NODEPORT_MIN: {{ .Values.k8s.nodeportMin | quote }}
+  K8S_NODEPORT_MAX: {{ .Values.k8s.nodeportMax | quote }}
+  WARM_POOL_SIZE: {{ .Values.config.warmPoolSize | quote }}
+  LITELLM_DEFAULT_MODEL: {{ .Values.config.defaultModel | quote }}
+  PREINSTALLED_GITHUB_REPO: {{ .Values.config.preinstalledRepo | quote }}
+  {{- if .Values.config.awsRegion }}
+  AWS_REGION: {{ .Values.config.awsRegion | quote }}
+  {{- end }}
+  {{- if .Values.config.baseUrl }}
+  BASE_URL: {{ .Values.config.baseUrl | quote }}
+  {{- end }}

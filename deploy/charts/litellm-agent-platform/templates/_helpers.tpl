@@ -70,6 +70,7 @@ Secret name for platform env vars.
 
 {{/*
 Database URL — prefers externalDatabase.url, then builds from parts.
+Bitnami PostgreSQL subchart creates service: {{ .Release.Name }}-postgresql
 */}}
 {{- define "litellm-agent-platform.databaseUrl" -}}
 {{- if .Values.externalDatabase.url }}
@@ -77,7 +78,7 @@ Database URL — prefers externalDatabase.url, then builds from parts.
 {{- else if .Values.externalDatabase.existingSecret }}
 {{- printf "$(DB_URL_FROM_SECRET)" }}
 {{- else if .Values.postgresql.enabled }}
-{{- printf "postgresql://%s:%s@%s:%d/%s" .Values.postgresql.auth.username .Values.postgresql.auth.password (include "litellm-agent-platform.fullname" .) (int 5432) .Values.postgresql.auth.database }}
+{{- printf "postgresql://%s:%s@%s-postgresql:%d/%s" .Values.postgresql.auth.username .Values.postgresql.auth.password .Release.Name (int 5432) .Values.postgresql.auth.database }}
 {{- else }}
 {{- printf "postgresql://%s:%s@%s:%s/%s" .Values.externalDatabase.username .Values.externalDatabase.password .Values.externalDatabase.host .Values.externalDatabase.port .Values.externalDatabase.database }}
 {{- end }}

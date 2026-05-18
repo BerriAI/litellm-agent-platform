@@ -1,14 +1,5 @@
 {{- if .Values.rbac.create }}
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ include "litellm-agent-platform.serviceAccountName" . }}-token
-  namespace: {{ .Release.Namespace }}
-  annotations:
-    kubernetes.io/service-account.name: {{ include "litellm-agent-platform.serviceAccountName" . }}
-type: kubernetes.io/service-account-token
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
