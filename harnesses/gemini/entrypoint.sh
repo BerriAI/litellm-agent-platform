@@ -69,7 +69,14 @@ if [ -f "$SA_JSON_PATH" ] && grep -q '"private_key"' "$SA_JSON_PATH" 2>/dev/null
   # itself is the trust boundary; without this the CLI bails with
   # "not running in a trusted directory". Real value, not vault-stubbed.
   export GEMINI_CLI_TRUST_WORKSPACE=true
-  echo "[entrypoint] vertex auto-config: project=$GOOGLE_CLOUD_PROJECT location=$GOOGLE_CLOUD_LOCATION trust=true"
+  # Bypass vault for gemini. The CLI's bundled HttpsProxyAgent import is
+  # broken ("TypeError: HttpsProxyAgent is not a constructor") when
+  # HTTPS_PROXY is set, so every model call dies before reaching Google.
+  # In Vertex mode we have a real SA on disk and the CLI mints real OAuth
+  # bearer tokens locally — vault's stub-swap adds nothing here. Send
+  # gemini's egress direct.
+  unset HTTPS_PROXY HTTP_PROXY https_proxy http_proxy
+  echo "[entrypoint] vertex auto-config: project=$GOOGLE_CLOUD_PROJECT location=$GOOGLE_CLOUD_LOCATION trust=true (proxy bypassed)"
 fi
 
 # When GEMINI_SELFTEST_PROMPT is set (any value — vault stubs the content but
