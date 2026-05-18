@@ -47,7 +47,17 @@ fi
 # /tty proxy (useful as a smoke test on a regressed proxy). Non-fatal on
 # failure — TUI flow still starts below.
 if [ -n "${GEMINI_SELFTEST_PROMPT:-}" ]; then
-  echo "[selftest] running: gemini -p ..." >&2
+  echo "[selftest] env probe:"
+  echo "  GOOGLE_GENAI_USE_VERTEXAI=${GOOGLE_GENAI_USE_VERTEXAI:-<unset>}"
+  echo "  GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-<unset>}"
+  echo "  GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-<unset>}"
+  echo "  GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-<unset>}"
+  echo "  GEMINI_API_KEY=${GEMINI_API_KEY:+<set>}${GEMINI_API_KEY:-<unset>}"
+  echo "  ls /work/repo:"
+  ls -la /work/repo 2>&1 | head -5
+  echo "  /lap-shared/env contents (keys only):"
+  sed 's/=.*$/=<value>/' /lap-shared/env 2>/dev/null | head -10
+  echo "[selftest] running: gemini -p ..."
   echo "[selftest-begin]"
   gemini -p "$GEMINI_SELFTEST_PROMPT" 2>&1 || echo "[selftest] gemini exited non-zero"
   echo "[selftest-end]"
