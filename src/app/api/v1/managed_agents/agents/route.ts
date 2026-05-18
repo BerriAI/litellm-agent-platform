@@ -11,6 +11,7 @@
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
+import { appendSkillBlock } from "@/server/skill-prompt";
 import {
   CreateAgentBody,
   HARNESS_OPENCODE,
@@ -105,11 +106,34 @@ export const POST = wrap(async (req: Request) => {
       error: `unknown harness_id "${harness_id}". Valid: ${[...KNOWN_HARNESSES].join(", ")}`,
     });
   }
+
+  // Resolve attached skills (if any), ownership-check in one query, and
+  // append each as a `<!-- skill:<id> -->` block to the prompt. Order is
+  // preserved from `body.skill_ids`. Mirrors the single-attach route's
+  // 404-on-unknown-or-foreign pattern so we never silently drop a skill_id.
+  let finalPrompt = body.prompt ?? null;
+  const skillIds = body.skill_ids ? Array.from(new Set(body.skill_ids)) : [];
+  if (skillIds.length > 0) {
+    const skills = await prisma.skill.findMany({
+      where: { skill_id: { in: skillIds }, created_by: identity.user_id },
+    });
+    if (skills.length !== skillIds.length) {
+      httpError(404, "one or more skill_ids not found");
+    }
+    const byId = new Map(skills.map((s) => [s.skill_id, s]));
+    let prompt = finalPrompt ?? "";
+    for (const id of skillIds) {
+      const s = byId.get(id);
+      if (s) prompt = appendSkillBlock(prompt, s.skill_id, s.content);
+    }
+    finalPrompt = prompt || null;
+  }
+
   const created = await prisma.agent.create({
     data: {
       agent_name: body.name ?? null,
       model: body.model,
-      prompt: body.prompt ?? null,
+      prompt: finalPrompt,
       // zod gives us `unknown[]`; Prisma's Json column wants InputJsonValue.
       // We trust the body here — the agent owner is authenticated.
       tools: body.tools as Prisma.InputJsonValue,

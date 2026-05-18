@@ -32,7 +32,19 @@
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { getProvider } from "./registry";
-import type { Integration, SessionEvent } from "./types";
+import type {
+  Integration,
+  IntegrationEvent,
+  SessionEvent,
+} from "./types";
+
+/**
+ * Messaging-style integrations reuse a conversation after this many ms of
+ * idleness. Past that, a fresh LAP session is spawned. Matches the platform's
+ * own session reaper window so we don't try to send into a sandbox the
+ * reconciler has already torn down.
+ */
+const MESSAGING_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface ParsedRequest {
   raw: Buffer;
@@ -133,6 +145,10 @@ export async function handleInbound(
 
     void sendFollowupToSession({ session_id: ext.session_id, body: event.body });
     return new Response(null, { status: 202 });
+  }
+
+  if (event.kind === "message") {
+    return handleMessage({ integration, install, event });
   }
 
   if (event.kind === "cancel") {
@@ -248,6 +264,11 @@ async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
         external_ref: input.external_ref,
       },
     });
+    // The session create endpoint returns immediately with status=creating;
+    // the initial_prompt is processed once the pod is up. Poll for the
+    // resulting Session.response and forward it to the integration so the
+    // user actually gets the agent's answer back in their medium.
+    void pollAndForwardInitialResponse(session.session_id);
   } catch (err) {
     console.error("[integrations/dispatcher] spawn failed:", err);
     // Surface the failure to the medium so the user isn't left hanging.
@@ -285,12 +306,178 @@ async function sendFollowupToSession(args: {
         "content-type": "application/json",
         authorization: `Bearer ${env.MASTER_KEY}`,
       },
-      body: JSON.stringify({ message: args.body }),
+      body: JSON.stringify({ text: args.body }),
     });
     if (!res.ok) {
       throw new Error(`followup failed: ${res.status} ${await res.text()}`);
     }
+    // /sessions/:id/message returns the harness reply synchronously. Pipe it
+    // back to the originating integration so the user sees the answer.
+    const reply = (await res.json()) as unknown;
+    const text = extractTextFromHarnessReply(reply);
+    if (text) {
+      await forwardSessionEvent(args.session_id, {
+        type: "response",
+        body: text,
+      });
+    }
   } catch (err) {
     console.error("[integrations/dispatcher] followup failed:", err);
+    await forwardSessionEvent(args.session_id, {
+      type: "error",
+      body: err instanceof Error ? err.message : String(err),
+    }).catch(() => {
+      /* best-effort */
+    });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Messaging-style mediums (Slack, …): one webhook arrives, we figure out from
+// IntegrationSession existence + TTL whether to spawn or follow up.
+// ---------------------------------------------------------------------------
+
+async function handleMessage(input: {
+  integration: Integration;
+  install: Awaited<ReturnType<typeof prisma.integrationInstall.findUnique>>;
+  event: Extract<IntegrationEvent, { kind: "message" }>;
+}): Promise<Response> {
+  const { integration, install, event } = input;
+  if (!install) return errorResponse(404, "install not found");
+
+  // Reusable session lookup. We pull the linked Session so we can check
+  // status + last_seen_at without a second round trip.
+  const existing = await prisma.integrationSession.findUnique({
+    where: { external_session_id: event.external_session_id },
+    include: { session: true },
+  });
+  const reusable = isReusableSession(existing?.session);
+
+  if (existing && reusable) {
+    // Same conversation — POST as a follow-up to the live LAP session.
+    void sendFollowupToSession({
+      session_id: existing.session_id,
+      body: event.prompt,
+    });
+    return new Response(null, { status: 202 });
+  }
+
+  // No existing session, or the prior one is stale/dead. Start fresh.
+  const binding = await prisma.agentIntegrationBinding.findFirst({
+    where: { install_id: install.install_id, enabled: true },
+    include: { agent: true },
+  });
+  if (!binding) {
+    return errorResponse(404, "no agent bound to this install");
+  }
+
+  if (existing && !reusable) {
+    // Drop the stale row so the unique constraint on external_session_id
+    // doesn't block the upcoming `integrationSession.create` for the new
+    // LAP session. The orphan Session row stays — the reconciler reaps it.
+    await prisma.integrationSession
+      .delete({ where: { external_session_id: event.external_session_id } })
+      .catch(() => {
+        /* best-effort — concurrent webhook may have raced us */
+      });
+  }
+
+  void spawnSessionForEvent({
+    integration,
+    install_id: install.install_id,
+    binding_id: binding.binding_id,
+    external_session_id: event.external_session_id,
+    external_ref: event.external_ref ?? null,
+    agent_id: binding.agent.agent_id,
+    prompt: event.prompt,
+  });
+
+  return new Response(null, { status: 202 });
+}
+
+function isReusableSession(
+  session: { status?: string; last_seen_at?: Date | null; created_at?: Date } | null | undefined,
+): boolean {
+  if (!session?.status) return false;
+  if (session.status !== "ready") return false;
+  const lastActivity =
+    session.last_seen_at?.getTime() ?? session.created_at?.getTime();
+  if (!lastActivity) return false;
+  return Date.now() - lastActivity < MESSAGING_SESSION_TTL_MS;
+}
+
+// ---------------------------------------------------------------------------
+// Response polling: the session create endpoint runs bring-up asynchronously
+// and returns a `creating` row immediately. The agent's reply to the initial
+// prompt lands in `Session.response` once bring-up + the first harness round
+// trip both complete. We poll for it and emit a `response` SessionEvent so
+// the originating integration can post the answer back to the user.
+// ---------------------------------------------------------------------------
+
+const POLL_INTERVAL_MS = 2_000;
+const POLL_DEADLINE_MS = 5 * 60_000;
+
+async function pollAndForwardInitialResponse(
+  session_id: string,
+): Promise<void> {
+  const deadline = Date.now() + POLL_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const row = await prisma.session.findUnique({
+      where: { session_id },
+      select: { status: true, response: true, failure_reason: true },
+    });
+    if (!row) return; // session was deleted under us
+    if (row.status === "failed") {
+      await forwardSessionEvent(session_id, {
+        type: "error",
+        body: row.failure_reason ?? "session failed to start",
+      }).catch(() => {
+        /* best-effort */
+      });
+      return;
+    }
+    if (row.status === "dead") return; // stopped externally
+    if (row.response) {
+      const text = extractTextFromHarnessReply(row.response);
+      if (text) {
+        await forwardSessionEvent(session_id, {
+          type: "response",
+          body: text,
+        }).catch(() => {
+          /* best-effort */
+        });
+        return;
+      }
+    }
+  }
+  // Hit the 5-minute cap. Tell the user instead of silently giving up.
+  await forwardSessionEvent(session_id, {
+    type: "error",
+    body: "Agent didn't reply within 5 minutes.",
+  }).catch(() => {
+    /* best-effort */
+  });
+}
+
+/**
+ * Pull the assistant's text out of a HarnessMessageResponse (or the row JSON
+ * snapshot). The harness reply shape is `{ parts: [{ type, text? }, ...] }`;
+ * we concatenate every `text` part in order. Returns null if the blob has no
+ * extractable text (e.g. only tool-call parts).
+ */
+function extractTextFromHarnessReply(reply: unknown): string | null {
+  if (!reply || typeof reply !== "object") return null;
+  const r = reply as { parts?: unknown };
+  if (!Array.isArray(r.parts)) return null;
+  const chunks: string[] = [];
+  for (const part of r.parts) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as { type?: unknown; text?: unknown };
+    if (p.type === "text" && typeof p.text === "string" && p.text.length > 0) {
+      chunks.push(p.text);
+    }
+  }
+  if (chunks.length === 0) return null;
+  return chunks.join("\n").trim() || null;
 }

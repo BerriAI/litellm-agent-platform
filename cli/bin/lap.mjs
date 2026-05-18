@@ -4,6 +4,8 @@
 // Usage:
 //   lap <agent-name>                open the agent's TUI in a sandbox
 //   lap --agent <name>              same as above (flag form)
+//   lap --resume <id-or-url>        reattach to an existing session by ID
+//                                    or by full <base>/sessions/<id> URL
 //   lap agents                      list agents on the platform
 //   lap login                       set base URL + master key (one-time)
 //   lap config                      show current config
@@ -183,6 +185,104 @@ function isTuiAgent(a) {
   return CLIENT_TUI_HARNESSES.has(a.harness_id);
 }
 
+// Re-fetches the session row one more time (best-effort) and prints every
+// field that's useful for debugging a stuck startup — session id, status,
+// phase, phase_detail, failure_reason, sandbox_url, timestamps — so the
+// user has something concrete to paste when reporting the issue. Called
+// from the poll loop on timeout and on terminal `failed`/`dead` status.
+async function printSessionDiagnostics(cfg, sid, lastSession, headline) {
+  let s = lastSession;
+  try {
+    const r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions/${sid}`, {
+      headers: { "authorization": `Bearer ${cfg.key}` },
+    });
+    if (r.ok) s = (await r.json().catch(() => null)) ?? s;
+  } catch { /* keep lastSession — diagnostics are best-effort */ }
+  const fields = [
+    ["session_id",     sid],
+    ["status",         s?.status],
+    ["phase",          s?.phase],
+    ["phase_detail",   s?.phase_detail],
+    ["failure_reason", s?.failure_reason],
+    ["sandbox_url",    s?.sandbox_url],
+    ["created_at",     s?.created_at],
+    ["last_seen_at",   s?.last_seen_at ?? s?.updated_at],
+  ];
+  console.error(`\n  ${ansi.red(`✗ ${headline}`)}\n`);
+  for (const [k, v] of fields) {
+    if (v === undefined || v === null || v === "") continue;
+    const label = (k + ":").padEnd(16);
+    const display = typeof v === "string" ? v : JSON.stringify(v);
+    console.error(`    ${ansi.dim(label)}${display}`);
+  }
+  console.error(`\n    ${ansi.dim("please share this block when reporting the issue.")}`);
+}
+
+// Derive the WS URL to attach to from a session row. Returns null + prints
+// an error to stderr if neither a public tty_url nor a reachable sandbox_url
+// is available (older platforms, in-cluster sandbox without LAP_TTY_FALLBACK).
+function deriveTtyUrl(cfg, session) {
+  if (session.tty_url) {
+    if (/^wss?:\/\//.test(session.tty_url)) return session.tty_url;
+    if (/^https?:\/\//.test(session.tty_url)) return session.tty_url.replace(/^http/, "ws");
+    const baseWs = cfg.base.replace(/^http/, "ws").replace(/\/+$/, "");
+    const suffix = session.tty_url.startsWith("/") ? session.tty_url : `/${session.tty_url}`;
+    return baseWs + suffix;
+  }
+  if (session.sandbox_url && !session.sandbox_url.includes(".svc.cluster.local")) {
+    return session.sandbox_url.replace(/^http/, "ws").replace(/\/+$/, "") + "/tty";
+  }
+  if (TTY_FALLBACK) {
+    console.log(`  ${ansi.dim("(sandbox_url is in-cluster — using LAP_TTY_FALLBACK)")}`);
+    return TTY_FALLBACK;
+  }
+  if (session.sandbox_url) {
+    console.error(`  ${ansi.red(`✗ session.sandbox_url is in-cluster (${session.sandbox_url}) and the platform did not return a tty_url.`)}`);
+  } else {
+    console.error(`  ${ansi.red("✗ platform returned neither tty_url nor a reachable sandbox_url.")}`);
+  }
+  console.error(`  ${ansi.dim("  upgrade the platform, or set LAP_TTY_FALLBACK=ws://host:port/tty in your env")}`);
+  return null;
+}
+
+// Called from the WS close handler. The connection is gone but the session
+// row may still be ready on the server (ALB idle drop, transient network
+// blip, harness still running). Best-effort GET — if the row is ready, tell
+// the user how to reattach; if it's failed/dead, surface the reason instead
+// so they don't paste the resume command into a black hole.
+async function printResumeHint(cfg, sid) {
+  let status = null;
+  let failure = null;
+  try {
+    const r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions/${sid}`, {
+      headers: { authorization: `Bearer ${cfg.key}` },
+    });
+    if (r.ok) {
+      const s = await r.json().catch(() => null);
+      status = s?.status ?? null;
+      failure = s?.failure_reason ?? null;
+    }
+  } catch { /* best-effort */ }
+
+  if (status === "ready") {
+    console.log(`\n  ${ansi.bold("Session is still alive.")} Resume with:\n`);
+    console.log(`    ${ansi.cyan(`lap --resume ${sid}`)}\n`);
+    console.log(`  ${ansi.dim("or with the full URL:")}`);
+    console.log(`    ${ansi.dim(`lap --resume ${cfg.base}/sessions/${sid}`)}\n`);
+    return;
+  }
+  if (status === "failed" || status === "dead" || status === "stopped") {
+    const reason = failure ? ` — ${failure}` : "";
+    console.log(`\n  ${ansi.yellow(`Session is ${status}${reason}.`)}\n`);
+    return;
+  }
+  // Couldn't fetch (auth, network, 5xx). Still surface the resume command so
+  // the user has a chance — `lap --resume` will repeat the GET with the same
+  // error path and produce a clearer message if it's still broken.
+  console.log(`\n  ${ansi.dim("(could not verify session state — try anyway)")}\n`);
+  console.log(`    ${ansi.cyan(`lap --resume ${sid}`)}\n`);
+}
+
 async function openAgent(args) {
   // Accept `lap <name>`, `lap --agent <name>`, or `lap` (prompts).
   // The agent's harness_id determines what CLI runs inside the sandbox
@@ -249,15 +349,22 @@ async function openAgent(args) {
   }
   console.log(`  \x1b[32m✓\x1b[0m session \x1b[36m${sid.slice(0,8)}\x1b[0m`);
 
-  process.stdout.write("  \x1b[2mwaiting for sandbox\x1b[0m");
+  process.stdout.write(`  ${ansi.dim("waiting for sandbox")} `);
   let session = null;
   // Network blips shouldn't abort the poll, but server-side errors (401,
   // 4xx auth, 5xx outage) should surface fast. We tolerate up to two
   // consecutive failures and then bail with the upstream status so the
   // user isn't waiting out the full 60-iteration timeout to see a 401.
   let consecutiveFailures = 0;
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 1500));
+  // Track the most recent phase we printed so we can surface phase
+  // transitions inline instead of just dots — gives the user real signal
+  // about why a slow start is slow (cloning_repo vs installing_deps vs
+  // waiting_harness, etc.) rather than an opaque row of `.`.
+  let lastPhase = null;
+  const POLL_LIMIT = 60;
+  const POLL_INTERVAL_MS = 1500;
+  for (let i = 0; i < POLL_LIMIT; i++) {
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
     let r;
     try {
       r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions/${sid}`, {
@@ -289,66 +396,118 @@ async function openAgent(args) {
     }
     consecutiveFailures = 0;
     session = await r.json().catch(() => null);
-    process.stdout.write(".");
+    const phase = session?.phase ?? null;
+    if (phase && phase !== lastPhase) {
+      // First phase we see prints as `phase`; later transitions as `→ phase`
+      // so the line reads like `creating → cloning_repo → installing_deps`.
+      const arrow = lastPhase ? ` ${ansi.dim("→")} ` : "";
+      process.stdout.write(`${arrow}${ansi.cyan(phase)} `);
+      lastPhase = phase;
+    } else {
+      process.stdout.write(".");
+    }
     if (session?.status === "ready") break;
     if (session?.status === "failed" || session?.status === "dead") {
-      const fr = session.failure_reason;
-      const frStr = fr == null ? "" : typeof fr === "string" ? fr : JSON.stringify(fr);
-      console.error(`\n  \x1b[31m✗ ${session.status}: ${frStr}\x1b[0m`);
+      await printSessionDiagnostics(cfg, sid, session, `${session.status}`);
       process.exit(1);
     }
   }
   if (session?.status !== "ready") {
-    console.error("\n  \x1b[31m✗ timed out waiting for ready\x1b[0m");
+    const timeoutSecs = Math.round((POLL_LIMIT * POLL_INTERVAL_MS) / 1000);
+    await printSessionDiagnostics(cfg, sid, session, `session did not reach ready in ${timeoutSecs}s`);
     process.exit(1);
   }
-  process.stdout.write(" \x1b[32mready\x1b[0m\n");
+  process.stdout.write(` ${ansi.cyan("ready")}\n`);
 
   // Prefer session.tty_url when the platform provides it — that's a
   // platform-served route (e.g. /api/v1/managed_agents/sessions/<id>/tty
   // proxied by server-proxy.mjs) that's reachable over the same public
   // ingress as the rest of the API. Fall back to sandbox_url + /tty for
   // older platforms / local dev where the sandbox is directly reachable.
-  let wsUrl;
-  if (session.tty_url) {
-    if (/^wss?:\/\//.test(session.tty_url)) {
-      wsUrl = session.tty_url;
-    } else if (/^https?:\/\//.test(session.tty_url)) {
-      wsUrl = session.tty_url.replace(/^http/, "ws");
-    } else {
-      // Relative path — prepend the platform base URL, swap to ws/wss.
-      const baseWs = cfg.base.replace(/^http/, "ws").replace(/\/+$/, "");
-      const suffix = session.tty_url.startsWith("/") ? session.tty_url : `/${session.tty_url}`;
-      wsUrl = baseWs + suffix;
-    }
-  } else if (session.sandbox_url && !session.sandbox_url.includes(".svc.cluster.local")) {
-    wsUrl = session.sandbox_url.replace(/^http/, "ws").replace(/\/+$/, "") + "/tty";
-  } else if (TTY_FALLBACK) {
-    wsUrl = TTY_FALLBACK;
-    console.log(`  \x1b[2m(sandbox_url is in-cluster — using LAP_TTY_FALLBACK)\x1b[0m`);
-  } else {
-    if (session.sandbox_url) {
-      console.error(`  \x1b[31m✗ session.sandbox_url is in-cluster (${session.sandbox_url}) and the platform did not return a tty_url.\x1b[0m`);
-    } else {
-      console.error(`  \x1b[31m✗ platform returned neither tty_url nor a reachable sandbox_url.\x1b[0m`);
-    }
-    console.error(`  \x1b[2m  upgrade the platform, or set LAP_TTY_FALLBACK=ws://host:port/tty in your env\x1b[0m`);
-    process.exit(1);
-  }
+  const wsUrl = deriveTtyUrl(cfg, session);
+  if (!wsUrl) process.exit(1);
   // The harness's verifyClient requires the bearer token; the platform
   // returns it via session.tty_token (preferred) or via LAP_TTY_TOKEN env.
-  // We send it as a request header (not a query param) so the token doesn't
-  // end up in ingress / proxy / load-balancer access logs that record the
-  // request line. The harness accepts both forms; we use the header form
-  // from Node where it's available.
   const ttyToken = session.tty_token || process.env.LAP_TTY_TOKEN || "";
   console.log(`  \x1b[2m→ attaching local TTY to ${wsUrl}\x1b[0m`);
   console.log("  \x1b[2m(press Ctrl-D to detach)\x1b[0m\n");
 
-  await attachPty(wsUrl, ttyToken);
+  await attachPty(cfg, sid, wsUrl, ttyToken);
 }
 
-function attachPty(wsUrl, ttyToken) {
+// Reattach to an existing session by ID or by a full <base>/sessions/<id>
+// URL. Surfaced as the recovery path when the WS drops mid-session (which
+// is what `[connection closed]` prints when the ALB/ELB times us out or the
+// pod's egress hiccups). Refuses to attach when the session row is not
+// `ready` so the user doesn't stare at a dead WebSocket; the failure_reason
+// is printed instead.
+async function resumeSession(arg) {
+  if (!arg) {
+    console.error("  usage: lap --resume <session_id>");
+    console.error("         lap --resume <base>/sessions/<session_id>");
+    process.exit(2);
+  }
+
+  let baseOverride = null;
+  let sid;
+  // Accept either a bare UUID or a full URL whose path ends in
+  // `/sessions/<uuid>` (with optional query/fragment). The URL form lets a
+  // user paste a UI link directly from the platform without first running
+  // `lap login` against that base.
+  const urlMatch = arg.match(/^(https?:\/\/[^/]+(?:\/[^/?#]+)*?)\/sessions\/([0-9a-f-]{36})(?:[/?#].*)?$/i);
+  if (urlMatch) {
+    baseOverride = urlMatch[1].replace(/\/+$/, "");
+    sid = urlMatch[2];
+  } else if (/^[0-9a-f-]{36}$/i.test(arg)) {
+    sid = arg;
+  } else {
+    console.error(`  ${ansi.red(`✗ '${arg}' is not a session_id or sessions URL`)}`);
+    process.exit(2);
+  }
+
+  let cfg = loadConfig();
+  if (!cfg) {
+    console.error(`  ${ansi.red("✗ no config — run `lap login` first.")}`);
+    process.exit(1);
+  }
+  // URL-form base override applies for this one attach only — we don't
+  // persist it. If the user wants the new base saved, they can `lap login`.
+  if (baseOverride && baseOverride !== cfg.base) {
+    console.log(`  ${ansi.dim(`→ using base from URL: ${baseOverride}`)}`);
+    cfg = { ...cfg, base: baseOverride };
+  }
+
+  process.stdout.write(`  ${ansi.dim(`→ fetching session ${sid.slice(0, 8)}…`)} `);
+  let session;
+  try {
+    const r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions/${sid}`, {
+      headers: { authorization: `Bearer ${cfg.key}` },
+    });
+    if (!r.ok) {
+      console.error(`\n  ${ansi.red(`✗ ${r.status} ${r.statusText}`)}`);
+      process.exit(1);
+    }
+    session = await r.json();
+  } catch (e) {
+    console.error(`\n  ${ansi.red(`✗ session fetch failed: ${e.message}`)}`);
+    process.exit(1);
+  }
+  if (session.status !== "ready") {
+    const reason = session.failure_reason ? `: ${session.failure_reason}` : "";
+    console.error(`\n  ${ansi.red(`✗ session is ${session.status}${reason}`)}`);
+    process.exit(1);
+  }
+  console.log(ansi.cyan("ready"));
+
+  const wsUrl = deriveTtyUrl(cfg, session);
+  if (!wsUrl) process.exit(1);
+  const ttyToken = session.tty_token || process.env.LAP_TTY_TOKEN || "";
+  console.log(`  ${ansi.dim(`→ attaching local TTY to ${wsUrl}`)}`);
+  console.log(`  ${ansi.dim("(press Ctrl-D to detach)")}\n`);
+  await attachPty(cfg, sid, wsUrl, ttyToken);
+}
+
+function attachPty(cfg, sid, wsUrl, ttyToken) {
   return new Promise((resolve, reject) => {
     // Send the token both as `?token=` and as an Authorization header. AWS
     // ALB / Classic ELB silently strip custom request headers (including
@@ -368,6 +527,15 @@ function attachPty(wsUrl, ttyToken) {
     // would crash on every binary PTY frame because stdout.write rejects
     // ArrayBuffer.
 
+    // Keep-alive: AWS classic ELB defaults to 60s idle timeout, and many
+    // corporate proxies / NLBs are similarly tight. The TTY can sit silent
+    // for minutes (model thinking, user reading a permission prompt) and
+    // the WS gets silently dropped — the next keystroke goes to a dead
+    // socket and the user sees "[connection closed]" with no warning.
+    // Send a protocol-level WS ping every 30s so there's always recent
+    // traffic. The ws library handles pong correlation automatically.
+    let pingTimer;
+
     ws.on("open", () => {
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(true);
@@ -378,6 +546,11 @@ function attachPty(wsUrl, ttyToken) {
         cols: process.stdout.columns || 100,
         rows: process.stdout.rows || 30,
       }));
+
+      pingTimer = setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try { ws.ping(); } catch { /* underlying socket already torn down */ }
+      }, 30_000);
 
       process.stdin.on("data", (data) => {
         if (ws.readyState !== WebSocket.OPEN) return;
@@ -401,9 +574,19 @@ function attachPty(wsUrl, ttyToken) {
       else process.stdout.write(typeof data === "string" ? data : Buffer.from(data));
     });
 
-    ws.on("close", () => {
+    ws.on("close", async (code, reasonBuf) => {
+      if (pingTimer) clearInterval(pingTimer);
       if (process.stdin.isTTY) process.stdin.setRawMode(false);
-      console.log("\n  \x1b[2m[connection closed]\x1b[0m");
+      // Surface the close code/reason so a future drop is debuggable —
+      // 1006 = abnormal closure (typical ALB idle drop), 1001 = going away
+      // (pod restart / proxy shutdown), 1008 = policy violation (auth).
+      const reason = reasonBuf?.length ? reasonBuf.toString("utf8") : "";
+      const codeStr = code ? ` code=${code}` : "";
+      const reasonStr = reason ? ` reason=${reason}` : "";
+      console.log(`\n  ${ansi.dim(`[connection closed${codeStr}${reasonStr}]`)}`);
+      // Best-effort: tell the user how to reattach if the session row is
+      // still ready, or print the failure_reason if it died.
+      await printResumeHint(cfg, sid);
       resolve();
       process.exit(0);
     });
@@ -425,6 +608,7 @@ function help() {
     lap                             interactive wizard (login + agent picker)
     lap <agent-name>                open the agent's TUI in a sandbox
     lap --agent <name>              same as above (flag form)
+    lap --resume <id-or-url>        reattach to an existing session
     lap agents                      list agents on the platform ([tui] = compatible)
     lap login                       set base URL + master key (one-time)
     lap config                      show current config
@@ -433,6 +617,7 @@ function help() {
   \x1b[2mEXAMPLE\x1b[0m
     lap                             # first run — banner, login, pick
     lap refactor-bot                # fast path once you know the name
+    lap --resume 8114556d-eaa5-…    # reattach after a disconnect
 
   Config:  ${CONFIG}
 `);
@@ -498,6 +683,10 @@ async function wizard() {
 
 async function main() {
   const [, , ...args] = process.argv;
+  // `--resume` is checked before the subcommand switch so it works whether
+  // the user writes `lap --resume <id>` or `lap resume <id>`.
+  const resumeFlag = args.indexOf("--resume");
+  if (resumeFlag >= 0) return resumeSession(args[resumeFlag + 1]);
   const cmd = args[0];
   // Subcommands are reserved keywords. Anything else is treated as an agent
   // name shorthand for `lap --agent <name>`.
@@ -508,6 +697,7 @@ async function main() {
     case "help":   help(); break;
     case "login":  await login(); break;
     case "agents": await agentsCmd(); break;
+    case "resume": await resumeSession(args[1]); break;
     case "config": {
       const c = loadConfig();
       if (!c) console.log("  (no config — run `lap login`)");

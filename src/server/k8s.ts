@@ -30,6 +30,8 @@ import { fetch } from "undici";
 import { env } from "@/server/env";
 import { decrypt } from "@/server/integrations/core/crypto";
 import { renderMemoryBlock, topMemoriesForAgent } from "@/server/memory";
+import { prisma } from "@/server/db";
+import { parseAttachedSkillIds } from "@/server/skill-prompt";
 import {
   TAG_AGENT_ID,
   TAG_SESSION_ID,
@@ -242,6 +244,90 @@ function buildMeta(opts: RunTaskOpts): RunTaskMeta {
   return { name, labels };
 }
 
+// kebab-case ASCII slug, with collision suffixing inside a batch. Empty
+// inputs fall back to the skill_id so we never produce an empty directory
+// name when materializing SKILL.md files inside the sandbox.
+function slugifySkillName(name: string, fallback: string): string {
+  const base =
+    name
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || fallback;
+  return base;
+}
+
+// Claude Code only recognizes a SKILL.md when it begins with a YAML
+// frontmatter block declaring `name:` and `description:`. Skill content
+// authored in the LiteLLM UI is usually bare markdown, so we synthesize
+// frontmatter from the DB row's name/description when the content
+// doesn't already provide its own. JSON.stringify yields safe YAML for
+// any description string (YAML is a JSON superset for scalars).
+function ensureSkillFrontmatter(
+  content: string,
+  meta: { slug: string; name: string; description: string | null },
+): string {
+  const trimmed = content.trimStart();
+  if (trimmed.startsWith("---\n") || trimmed.startsWith("---\r\n")) {
+    return content;
+  }
+  const description =
+    (meta.description ?? "").trim() || `${meta.name} skill`;
+  return [
+    "---",
+    `name: ${meta.slug}`,
+    `description: ${JSON.stringify(description)}`,
+    "---",
+    "",
+    trimmed,
+  ].join("\n");
+}
+
+// Resolve the `<!-- skill:<id> -->` markers in the agent's prompt back into
+// the skill rows we need to materialize on disk inside the sandbox. The
+// platform writes the markers at agent-create or skill-attach time; here we
+// just re-fetch the content so the harness entrypoint can drop them at
+// `~/.claude/skills/<slug>/SKILL.md`. Returns `[]` (and we omit SKILLS_JSON
+// entirely) when the prompt has no attached skills.
+async function buildSkillsJsonForAgent(
+  agent: AgentRow,
+): Promise<Array<{ slug: string; content: string }>> {
+  const ids = parseAttachedSkillIds(agent.prompt);
+  if (ids.length === 0) return [];
+  const skills = await prisma.skill.findMany({
+    where: { skill_id: { in: ids } },
+    select: { skill_id: true, name: true, description: true, content: true },
+  });
+  const byId = new Map(skills.map((s) => [s.skill_id, s]));
+  const used = new Set<string>();
+  const out: Array<{ slug: string; content: string }> = [];
+  for (const id of ids) {
+    const row = byId.get(id);
+    // A marker with no Skill row means the skill was deleted or the marker
+    // came from the legacy ephemeral path (random UUID, never persisted).
+    // Skip — there is nothing to write.
+    if (!row) continue;
+    let slug = slugifySkillName(row.name, row.skill_id);
+    if (used.has(slug)) {
+      let i = 2;
+      while (used.has(`${slug}-${i}`)) i++;
+      slug = `${slug}-${i}`;
+    }
+    used.add(slug);
+    out.push({
+      slug,
+      content: ensureSkillFrontmatter(row.content, {
+        slug,
+        name: row.name,
+        description: row.description,
+      }),
+    });
+  }
+  return out;
+}
+
 async function buildContainerEnv(
   opts: RunTaskOpts,
 ): Promise<Array<{ name: string; value: string }>> {
@@ -254,6 +340,12 @@ async function buildContainerEnv(
   const memories = await topMemoriesForAgent(agent.agent_id);
   const memoryBlock = renderMemoryBlock(memories);
   const fullPrompt = [memoryBlock, agent.prompt ?? ""].filter(Boolean).join("\n\n");
+
+  // Materialization bundle: the harness entrypoint decodes SKILLS_JSON and
+  // writes each entry to `~/.claude/skills/<slug>/SKILL.md` so the `claude`
+  // TUI (and any future file-based skill consumer) discovers them natively.
+  const skillsBundle = await buildSkillsJsonForAgent(agent);
+  const skillsJson = skillsBundle.length > 0 ? JSON.stringify(skillsBundle) : "";
 
   // Phase-report wiring. The in-sandbox entrypoint POSTs to
   // {PLATFORM_URL}/api/v1/managed_agents/sessions/{SESSION_ID}/phase with
@@ -276,6 +368,7 @@ async function buildContainerEnv(
     LITELLM_API_BASE: env.LITELLM_API_BASE,
     LITELLM_DEFAULT_MODEL: agent.model,
     AGENT_PROMPT: fullPrompt,
+    SKILLS_JSON: skillsJson,
     PORT: String(agent.container_port),
     // For the harness's memory tools — empty LAP_BASE_URL makes the
     // tools no-op gracefully (the harness checks before registering them).

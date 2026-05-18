@@ -441,6 +441,8 @@ export interface CreateAgentRequest {
   allow_out?: string[];
   deny_out?: string[];
   sandbox_files?: SandboxFileSpec[];
+  /** Library skill IDs to attach at create time (in order). Each is materialized inside the sandbox as ~/.claude/skills/<slug>/SKILL.md on session boot. */
+  skill_ids?: string[];
 }
 
 export interface UpdateAgentRequest {
@@ -1218,6 +1220,81 @@ export function updateSkill(id: string, req: UpdateSkillRequest): Promise<SkillR
 
 export function deleteSkill(id: string): Promise<void> {
   return api<void>("DELETE", `/v1/skills/${encodeURIComponent(id)}`);
+}
+
+// ---------- Integrations / Channels ----------
+
+export interface IntegrationInstallSummary {
+  install_id: string;
+  workspace_id: string;
+  workspace_name: string;
+}
+
+export interface IntegrationBindingSummary {
+  binding_id: string;
+  install_id: string;
+  workspace_name: string;
+  enabled: boolean;
+}
+
+export interface IntegrationSummary {
+  id: string;
+  display_name: string;
+  icon: string;
+  docs_url: string;
+  /** Server has the env vars to actually use this integration. */
+  enabled: boolean;
+  /** Provider exposes a copy-paste app manifest (used by the wizard). */
+  has_manifest: boolean;
+  installs: IntegrationInstallSummary[];
+  binding: IntegrationBindingSummary | null;
+}
+
+export interface ListIntegrationsResponse {
+  providers: IntegrationSummary[];
+}
+
+export function listIntegrations(
+  agentId?: string,
+): Promise<ListIntegrationsResponse> {
+  const qs = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return api<ListIntegrationsResponse>("GET", `/v1/integrations${qs}`);
+}
+
+export interface IntegrationManifestResponse {
+  base_url: string;
+  manifest: unknown;
+}
+
+export function getIntegrationManifest(
+  providerId: string,
+): Promise<IntegrationManifestResponse> {
+  return api<IntegrationManifestResponse>(
+    "GET",
+    `/v1/integrations/${encodeURIComponent(providerId)}/manifest`,
+  );
+}
+
+export function bindIntegration(
+  agentId: string,
+  providerId: string,
+  installId: string,
+): Promise<IntegrationBindingSummary> {
+  return api<IntegrationBindingSummary>(
+    "POST",
+    `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/integrations/${encodeURIComponent(providerId)}/bind`,
+    { install_id: installId },
+  );
+}
+
+export function unbindIntegration(
+  agentId: string,
+  providerId: string,
+): Promise<{ deleted: number }> {
+  return api<{ deleted: number }>(
+    "DELETE",
+    `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/integrations/${encodeURIComponent(providerId)}/bind`,
+  );
 }
 
 // ---------- Harness response helpers ----------

@@ -1,0 +1,14 @@
+{
+  "name": "codex-tty-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "WebSocket PTY bridge for the OpenAI Codex CLI inside a sandbox container.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.20.1"
+  }
+}

@@ -53,6 +53,16 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # Exec into sandbox containers — required by execFilesIntoContainer in
+  # src/server/k8s.ts to inject CreateAgentBody.sandbox_files into the
+  # harness pod after it reaches Running. Without this verb the kubectl
+  # exec returns Forbidden, the platform marks the session failed at
+  # phase=injecting_files, and the pod logs show only a successful boot
+  # with no obvious error (the underlying RBAC denial gets coerced to
+  # "[object Object]" in failure_reason).
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
 
 ---
 # Bind the Role to the ServiceAccount.

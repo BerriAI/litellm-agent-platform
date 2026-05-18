@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { ChannelsSection } from "@/components/channels-section";
 import { ModelPicker } from "@/components/model-picker";
 import { PfpUpload } from "@/components/pfp-upload";
 import { CallAgentSnippets } from "@/components/call-agent-snippets";
@@ -542,6 +543,8 @@ export default function AgentDetailPage({ params }: PageProps) {
               </ul>
             )}
           </section>
+
+          <ChannelsSection agentId={agent.id} />
 
           <div className="mt-8">
             <CallAgentSnippets agentId={agent.id} />

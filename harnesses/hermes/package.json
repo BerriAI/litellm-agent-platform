@@ -1,0 +1,15 @@
+{
+  "name": "hermes-tty-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "WebSocket PTY bridge for the Nous Research Hermes Agent CLI inside a sandbox container.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/server.test.mjs"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.20.1"
+  }
+}

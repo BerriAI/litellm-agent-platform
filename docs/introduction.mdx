@@ -1,0 +1,28 @@
+---
+title: Introduction
+description: "Self-hosted infrastructure for running multiple agents in production."
+---
+
+LiteLLM Agent Platform manages:
+
+- Per-team / per-context sandboxes
+- Session continuity across pod restarts and upgrades
+
+Sandboxes run on Kubernetes via the [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) CRD. Local dev uses [kind](https://kind.sigs.k8s.io/).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the platform locally with kind + docker compose.
+  </Card>
+  <Card title="Spawn a task agent" icon="robot" href="/spawn-task-agent">
+    Create dedicated agents via the API.
+  </Card>
+  <Card title="Kubernetes backend" icon="server" href="/k8s-backend">
+    How sandboxes run on Kubernetes.
+  </Card>
+  <Card title="Deploy to AWS" icon="cloud" href="/deploy-aws">
+    Production deployment on EKS.
+  </Card>
+</CardGroup>

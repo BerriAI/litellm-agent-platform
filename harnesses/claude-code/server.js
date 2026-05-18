@@ -41,6 +41,15 @@ const MIME = {
 const CMD = process.env.POC_CMD ?? "claude";
 const REPO_DIR = process.env.REPO_DIR ?? process.cwd();
 
+// Wrap the agent in a tmux session so it survives WS reconnects. `lap` is
+// a fixed session name (one agent per sandbox pod). `new-session -A`
+// creates the session on first attach and reattaches to the existing one
+// thereafter — so `lap --resume` lands on the in-progress agent instead
+// of spawning a fresh REPL. Killing the spawned pty on ws-close kills the
+// tmux *client*, not the server, so the agent and its scrollback persist.
+const SPAWN_CMD = "tmux";
+const SPAWN_ARGS = ["new-session", "-A", "-s", "lap", CMD];
+
 // Auth token. Empty → fail-closed: all auth-gated requests are rejected.
 // The platform is expected to set this per-pod at sandbox-create time and
 // hand the same value back to authenticated session clients.
@@ -208,7 +217,7 @@ const wss = new WebSocketServer({
 wss.on("connection", (ws) => {
   let term;
   try {
-    term = pty.spawn(CMD, [], {
+    term = pty.spawn(SPAWN_CMD, SPAWN_ARGS, {
       name: "xterm-256color",
       cols: 100,
       rows: 30,
@@ -216,12 +225,12 @@ wss.on("connection", (ws) => {
       env: process.env,
     });
   } catch (e) {
-    ws.send(`\r\n\x1b[31m[bridge] failed to spawn ${CMD}: ${e.message}\x1b[0m\r\n`);
+    ws.send(`\r\n\x1b[31m[bridge] failed to spawn ${SPAWN_CMD}: ${e.message}\x1b[0m\r\n`);
     ws.close();
     return;
   }
 
-  console.log(`[bridge] spawned ${CMD} (pid ${term.pid}) for ${ws._socket.remoteAddress}`);
+  console.log(`[bridge] spawned ${SPAWN_CMD} ${SPAWN_ARGS.join(" ")} (pid ${term.pid}) for ${ws._socket.remoteAddress}`);
 
   term.onData((data) => {
     if (ws.readyState === ws.OPEN) ws.send(data);

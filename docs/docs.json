@@ -1,0 +1,50 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "LiteLLM Agent Platform",
+  "colors": {
+    "primary": "#6466E9",
+    "light": "#8A8CF0",
+    "dark": "#4F46E5"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/litellm-logo.jpeg",
+    "dark": "/logo/litellm-logo.jpeg"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "spawn-task-agent"
+            ]
+          },
+          {
+            "group": "Deploy",
+            "pages": [
+              "k8s-backend",
+              "deploy-aws"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/BerriAI/litellm-agent-platform",
+      "discord": "https://discord.gg/Nkxw3rm3EE"
+    }
+  }
+}

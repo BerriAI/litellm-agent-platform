@@ -22,14 +22,22 @@ const EnvSchema = z.object({
   K8S_NODE_HOST: z.string().optional().default("host.docker.internal"),
   K8S_IMAGE_PULL_POLICY: z.enum(["Never", "IfNotPresent", "Always"]).default("Never"),
   K8S_HARNESS_IMAGE: z.string().min(1).default("opencode-sandbox:dev"),
-  K8S_HARNESS_IMAGE_OPENCODE: z.string().optional(),
-  K8S_HARNESS_IMAGE_CLAUDE_SDK: z.string().optional(),
+  // Per-harness overrides. `.min(1)` (combined with `.optional()`) means
+  // "unset is fine, but if you set it, it must be non-empty" — protects
+  // against the failure mode where an empty Secret value silently produces
+  // image="" in the Sandbox CR. resolveHarnessImage() also uses `||` so an
+  // empty string would fall back to K8S_HARNESS_IMAGE even if it got past
+  // this gate, but failing fast at boot is clearer than that fallback.
+  K8S_HARNESS_IMAGE_OPENCODE: z.string().min(1).optional(),
+  K8S_HARNESS_IMAGE_CLAUDE_SDK: z.string().min(1).optional(),
   // TUI harnesses — see harnesses/claude-code/ and harnesses/codex/. The
   // session view attaches xterm.js to /tty on the pod instead of using the
   // JSON message API. Falls back to K8S_HARNESS_IMAGE if unset, like the
   // other harness vars.
-  K8S_HARNESS_IMAGE_CLAUDE_CODE: z.string().optional(),
-  K8S_HARNESS_IMAGE_CODEX: z.string().optional(),
+  K8S_HARNESS_IMAGE_CLAUDE_CODE: z.string().min(1).optional(),
+  K8S_HARNESS_IMAGE_CODEX: z.string().min(1).optional(),
+  K8S_HARNESS_IMAGE_HERMES: z.string().min(1).optional(),
+  K8S_HARNESS_IMAGE_GEMINI: z.string().min(1).optional(),
   K8S_VAULT_IMAGE: z.string().min(1).default("vault:dev"),
   K8S_API_SERVER: z.string().optional().default(""),
   // Explicit opt-in to skip TLS verification when K8S_API_SERVER is

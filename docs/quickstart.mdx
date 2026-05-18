@@ -1,0 +1,37 @@
+---
+title: Quickstart
+description: "Run the LiteLLM Agent Platform locally."
+---
+
+## Prerequisites
+
+- Docker Desktop
+- [kind](https://kind.sigs.k8s.io/)
+- `kubectl`
+- `helm`
+- A LiteLLM gateway
+
+## Boot the platform
+
+```bash
+bin/kind-up.sh
+docker compose up
+```
+
+`bin/kind-up.sh` is idempotent — it provisions a kind cluster `agent-sbx`, installs the agent-sandbox controller, and loads the harness image.
+
+`docker compose up` boots Postgres, runs the schema migration, and starts web (`:3000`) + worker.
+
+## Container env passthrough
+
+Anything in `.env` prefixed `CONTAINER_ENV_` is injected into every sandbox container with the prefix stripped:
+
+```bash
+CONTAINER_ENV_GITHUB_TOKEN=ghp_...   # container sees GITHUB_TOKEN=ghp_...
+```
+
+## Next
+
+- Architecture and tuning: [Kubernetes backend](/k8s-backend)
+- Spawning agents via API: [Spawn a task agent](/spawn-task-agent)
+- Production deploy: [Deploy to AWS](/deploy-aws)

@@ -43,7 +43,15 @@ if [ "${VAULT_ENABLED:-}" = "true" ]; then
       # present for any non-proxied hosts. Don't require system CAs to exist —
       # vault CA alone is sufficient when everything routes through the proxy.
       BUNDLE=/tmp/lap-ca-bundle.crt
-      cat /etc/vault-ca/tls.crt > "$BUNDLE"
+      # Always emit a trailing newline between certs. The vault-issued
+      # tls.crt has no terminating LF, so plain `cat A B >> bundle` glues
+      # `-----END CERTIFICATE----------BEGIN CERTIFICATE-----` together
+      # on one line. OpenSSL's PEM parser then rejects the whole file
+      # with `[X509] PEM lib (_ssl.c:4123)`. Python's `ssl` and the
+      # `openai` SDK both blow up here, breaking hermes (and any python
+      # client) on its first model call. printf '\n' separates the
+      # blocks correctly even when the input has no trailing newline.
+      { cat /etc/vault-ca/tls.crt; printf '\n'; } > "$BUNDLE"
       if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
         cat /etc/ssl/certs/ca-certificates.crt >> "$BUNDLE"
       fi

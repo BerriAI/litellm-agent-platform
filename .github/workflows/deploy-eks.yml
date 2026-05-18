@@ -108,6 +108,9 @@ jobs:
       claude_code_image: ${{ steps.harness-claude-code.outputs.image }}
       claude_sdk_image: ${{ steps.harness-claude-sdk.outputs.image }}
       opencode_image: ${{ steps.harness-opencode.outputs.image }}
+      codex_image: ${{ steps.harness-codex.outputs.image }}
+      hermes_image: ${{ steps.harness-hermes.outputs.image }}
+      gemini_image: ${{ steps.harness-gemini.outputs.image }}
 
     steps:
       - name: Checkout
@@ -173,6 +176,30 @@ jobs:
           docker push "$IMG"
           echo "image=$IMG" >> "$GITHUB_OUTPUT"
 
+      - name: Build & push codex harness
+        id: harness-codex
+        run: |
+          IMG="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/litellm-agent-platform:harness-codex-${{ github.sha }}"
+          docker buildx build -f harnesses/codex/Dockerfile -t "$IMG" .
+          docker push "$IMG"
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push hermes harness
+        id: harness-hermes
+        run: |
+          IMG="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/litellm-agent-platform:harness-hermes-${{ github.sha }}"
+          docker buildx build -f harnesses/hermes/Dockerfile -t "$IMG" .
+          docker push "$IMG"
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push gemini harness
+        id: harness-gemini
+        run: |
+          IMG="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/litellm-agent-platform:harness-gemini-${{ github.sha }}"
+          docker buildx build -f harnesses/gemini/Dockerfile -t "$IMG" .
+          docker push "$IMG"
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
+
   # ── Job 2: Roll out the new image to EKS deployments ──────────────────────
   deploy:
     name: Deploy to EKS
@@ -203,12 +230,62 @@ jobs:
             --region "${{ secrets.AWS_REGION }}"
 
       - name: Update harness images in litellm-env secret
+        # GitHub Actions masks step outputs whose values contain a secret
+        # (here AWS_ACCOUNT_ID), and the masked value silently resolves to
+        # empty when consumed via `needs.build-push.outputs.*`. The earlier
+        # version of this step did exactly that and patched the secret with
+        # empty strings, so every claude-code session create then failed with
+        # `spec.containers[0].image: Required value`. Construct the URIs
+        # inline (same way the deployment-image step does) so the secrets
+        # are interpolated by bash at run time, never crossing a step output.
+        env:
+          REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/litellm-agent-platform
+          SHA: ${{ github.sha }}
         run: |
-          kubectl patch secret litellm-env -n default -p "{\"data\":{
-            \"K8S_HARNESS_IMAGE_CLAUDE_CODE\":\"$(echo -n '${{ needs.build-push.outputs.claude_code_image }}' | base64 | tr -d '\n')\",
-            \"K8S_HARNESS_IMAGE_CLAUDE_SDK\":\"$(echo -n '${{ needs.build-push.outputs.claude_sdk_image }}' | base64 | tr -d '\n')\",
-            \"K8S_HARNESS_IMAGE_OPENCODE\":\"$(echo -n '${{ needs.build-push.outputs.opencode_image }}' | base64 | tr -d '\n')\"
-          }}"
+          CC="${REGISTRY}:harness-claude-code-${SHA}"
+          SDK="${REGISTRY}:harness-claude-sdk-${SHA}"
+          OC="${REGISTRY}:harness-opencode-${SHA}"
+          CX="${REGISTRY}:harness-codex-${SHA}"
+          HM="${REGISTRY}:harness-hermes-${SHA}"
+          GM="${REGISTRY}:harness-gemini-${SHA}"
+          CC_B64=$(printf '%s' "$CC" | base64 | tr -d '\n')
+          SDK_B64=$(printf '%s' "$SDK" | base64 | tr -d '\n')
+          OC_B64=$(printf '%s' "$OC" | base64 | tr -d '\n')
+          CX_B64=$(printf '%s' "$CX" | base64 | tr -d '\n')
+          HM_B64=$(printf '%s' "$HM" | base64 | tr -d '\n')
+          GM_B64=$(printf '%s' "$GM" | base64 | tr -d '\n')
+          # JSON Patch `add` both creates and overwrites (RFC 6902 §4.1).
+          # `replace` would fail with "object not found" on the first deploy
+          # that introduces a new harness key (e.g. CODEX/HERMES) before the
+          # secret has it.
+          kubectl patch secret litellm-env -n default --type=json -p="[
+            {\"op\":\"add\",\"path\":\"/data/K8S_HARNESS_IMAGE_CLAUDE_CODE\",\"value\":\"$CC_B64\"},
+            {\"op\":\"add\",\"path\":\"/data/K8S_HARNESS_IMAGE_CLAUDE_SDK\",\"value\":\"$SDK_B64\"},
+            {\"op\":\"add\",\"path\":\"/data/K8S_HARNESS_IMAGE_OPENCODE\",\"value\":\"$OC_B64\"},
+            {\"op\":\"add\",\"path\":\"/data/K8S_HARNESS_IMAGE_CODEX\",\"value\":\"$CX_B64\"},
+            {\"op\":\"add\",\"path\":\"/data/K8S_HARNESS_IMAGE_HERMES\",\"value\":\"$HM_B64\"},
+            {\"op\":\"add\",\"path\":\"/data/K8S_HARNESS_IMAGE_GEMINI\",\"value\":\"$GM_B64\"}
+          ]"
+
+      # Apply the manifests BEFORE setting the image so env-var additions
+      # (e.g. new K8S_HARNESS_IMAGE_<NAME> entries on the pod spec) reach
+      # the cluster. `kubectl set image` only updates the image field —
+      # any other change to the deployment template that lives only in
+      # k8s/web.yaml (env mappings, volumes, etc.) never lands without
+      # `kubectl apply`. The manifest's `image:` is a `${GIT_SHA}`
+      # placeholder; envsubst expands it to this commit's SHA so the
+      # applied template carries a valid image reference — the same SHA
+      # the explicit `kubectl set image` step below pins again.
+      - name: Apply RBAC + web + worker manifests
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          # RBAC has no template placeholders, apply directly. Must come
+          # first so any new verb the deployment depends on is in place
+          # before the rollout starts.
+          kubectl apply -n default -f k8s/rbac-platform.yaml
+          envsubst '$GIT_SHA' < k8s/web.yaml    | kubectl apply -n default -f -
+          envsubst '$GIT_SHA' < k8s/worker.yaml | kubectl apply -n default -f -
 
       - name: Update web deployment image
         run: |

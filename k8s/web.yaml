@@ -137,6 +137,46 @@ spec:
                   name: litellm-env
                   key: K8S_HARNESS_IMAGE
 
+            # Per-harness image overrides. Each is optional — if a key is
+            # absent from the secret, resolveHarnessImage falls back to
+            # K8S_HARNESS_IMAGE above.
+            - name: K8S_HARNESS_IMAGE_OPENCODE
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_OPENCODE
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_CLAUDE_SDK
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_CLAUDE_SDK
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_CLAUDE_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_CLAUDE_CODE
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_CODEX
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_CODEX
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_HERMES
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_HERMES
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_GEMINI
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_GEMINI
+                  optional: true
+
             - name: K8S_NAMESPACE
               value: "default"
 
@@ -218,6 +258,14 @@ metadata:
   namespace: default
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    # WebSocket traffic to /tty often pauses for >60s (the AWS ELB default
+    # idle timeout) while the model thinks or the user reads a permission
+    # prompt. Without this annotation the ELB silently drops the connection
+    # and the lap CLI prints "[connection closed]" the moment the user
+    # presses a key. 3600s (1h) matches what a long agentic session looks
+    # like in practice; lap CLI also sends WS pings every 30s as a second
+    # line of defense (see cli/bin/lap.mjs).
+    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "3600"
 spec:
   type: LoadBalancer
   selector:

@@ -137,6 +137,15 @@ export default function NewAgentPage() {
   const [skillDragOver, setSkillDragOver] = useState(false);
   const [librarySkills, setLibrarySkills] = useState<SkillRow[]>([]);
   const [loadingLibrary, setLoadingLibrary] = useState(false);
+  // Library skills picked for multi-attach. On submit these are passed as
+  // `skill_ids` and the server appends per-id markers + the harness
+  // materializes ~/.claude/skills/<slug>/SKILL.md.
+  const [pickedSkillIds, setPickedSkillIds] = useState<string[]>([]);
+  function toggleSkillPick(id: string) {
+    setPickedSkillIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
 
   async function openPickSkill() {
     setSkillMode("pick");
@@ -350,6 +359,7 @@ export default function NewAgentPage() {
         allow_out: sandboxTpl?.allow_out,
         deny_out: sandboxTpl?.deny_out,
         sandbox_files: sandboxTpl?.files,
+        skill_ids: pickedSkillIds.length > 0 ? pickedSkillIds : undefined,
       });
       router.push(`/agents/${created.id}`);
     } catch (err) {
@@ -620,8 +630,38 @@ export default function NewAgentPage() {
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                A skill is a reusable instruction block injected after the system prompt.
+                A skill is a reusable instruction block. Library skills also land in the sandbox as <code className="font-mono">~/.claude/skills/&lt;slug&gt;/SKILL.md</code> so the TUI discovers them natively.
               </p>
+
+              {/* Always-visible summary of library skills picked so the
+                  user knows they're attached even when the picker is
+                  collapsed. */}
+              {pickedSkillIds.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-card px-2 py-1.5 text-xs">
+                  <span className="text-muted-foreground">
+                    {pickedSkillIds.length} library skill{pickedSkillIds.length === 1 ? "" : "s"} attached
+                  </span>
+                  {librarySkills
+                    .filter((s) => pickedSkillIds.includes(s.id))
+                    .map((s) => (
+                      <span
+                        key={s.id}
+                        className="inline-flex items-center gap-1 rounded-full border bg-background px-2 py-0.5"
+                      >
+                        <FileText className="size-3 text-muted-foreground" />
+                        {s.name}
+                        <button
+                          type="button"
+                          onClick={() => toggleSkillPick(s.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                          aria-label={`Detach ${s.name}`}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                </div>
+              ) : null}
 
               {skillMode === "write" ? (
                 <div
@@ -725,31 +765,66 @@ export default function NewAgentPage() {
                       </button>
                     </div>
                   ) : (
-                    <ul className="divide-y">
-                      {librarySkills.map((sk) => (
-                        <li key={sk.id}>
+                    <>
+                      <ul className="divide-y">
+                        {librarySkills.map((sk) => {
+                          const picked = pickedSkillIds.includes(sk.id);
+                          return (
+                            <li key={sk.id}>
+                              <button
+                                type="button"
+                                onClick={() => toggleSkillPick(sk.id)}
+                                className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                              >
+                                <span
+                                  className={cn(
+                                    "grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors",
+                                    picked
+                                      ? "border-foreground bg-foreground text-background"
+                                      : "border-border bg-transparent",
+                                  )}
+                                  aria-hidden
+                                >
+                                  {picked ? <Check className="size-3" /> : null}
+                                </span>
+                                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-medium">{sk.name}</p>
+                                  {sk.description ? (
+                                    <p className="truncate text-xs text-muted-foreground">{sk.description}</p>
+                                  ) : null}
+                                </div>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                        <span>
+                          {pickedSkillIds.length === 0
+                            ? "Select one or more skills to attach"
+                            : `${pickedSkillIds.length} selected`}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          {pickedSkillIds.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setPickedSkillIds([])}
+                              className="hover:text-foreground"
+                            >
+                              Clear
+                            </button>
+                          ) : null}
                           <button
                             type="button"
-                            onClick={() => {
-                              setSkillName(sk.name);
-                              setSkillDesc(sk.description ?? "");
-                              setSkillInstructions(sk.content);
-                              setSkillSaveToLibrary(false);
-                              setSkillMode("write");
-                            }}
-                            className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                            onClick={() => setSkillMode(null)}
+                            className="hover:text-foreground"
                           >
-                            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium">{sk.name}</p>
-                              {sk.description ? (
-                                <p className="truncate text-xs text-muted-foreground">{sk.description}</p>
-                              ) : null}
-                            </div>
+                            Done
                           </button>
-                        </li>
-                      ))}
-                    </ul>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
               ) : null}

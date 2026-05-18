@@ -1,6 +1,6 @@
 {
   "name": "@berriai/lap-cli",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Command-line client for the LiteLLM Agent Platform. Opens a sandboxed Claude Code TUI in your terminal.",
   "type": "module",
   "bin": {

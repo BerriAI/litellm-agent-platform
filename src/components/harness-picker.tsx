@@ -37,6 +37,18 @@ export const HARNESS_OPTIONS: HarnessOption[] = [
     description: "OpenAI Codex CLI, running in the sandbox. Opens as a live TUI in your browser via xterm.js.",
     mode: "TUI",
   },
+  {
+    id: "hermes",
+    label: "hermes",
+    description: "Nous Research Hermes Agent, running in the sandbox. Self-improving CLI with persistent memory + skills. Opens as a live TUI via xterm.js.",
+    mode: "TUI",
+  },
+  {
+    id: "gemini",
+    label: "gemini",
+    description: "Google Gemini CLI, running in the sandbox. Routes through the LiteLLM gateway via the /gemini passthrough. Opens as a live TUI via xterm.js.",
+    mode: "TUI",
+  },
 ];
 
 export const DEFAULT_HARNESS_ID = HARNESS_OPTIONS[0].id;

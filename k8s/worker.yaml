@@ -119,6 +119,46 @@ spec:
                   name: litellm-env
                   key: K8S_HARNESS_IMAGE
 
+            # Per-harness image overrides. Each is optional — if a key is
+            # absent from the secret, resolveHarnessImage falls back to
+            # K8S_HARNESS_IMAGE above.
+            - name: K8S_HARNESS_IMAGE_OPENCODE
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_OPENCODE
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_CLAUDE_SDK
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_CLAUDE_SDK
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_CLAUDE_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_CLAUDE_CODE
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_CODEX
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_CODEX
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_HERMES
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_HERMES
+                  optional: true
+            - name: K8S_HARNESS_IMAGE_GEMINI
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE_GEMINI
+                  optional: true
+
             - name: K8S_NAMESPACE
               value: "default"
 

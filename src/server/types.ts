@@ -137,6 +137,14 @@ export const CreateAgentBody = z.object({
       { message: `sandbox_files: total base64 size must be ≤ 10 MB` },
     ),
   /**
+   * Library skills to attach at create time. Each becomes a
+   * `<!-- skill:<id> -->` block appended to `prompt` (via appendSkillBlock)
+   * and is materialized inside the sandbox as `~/.claude/skills/<slug>/SKILL.md`
+   * on session boot. Caller must own every skill_id — unknown or foreign
+   * IDs cause a 404 (same pattern as the single-skill attach route).
+   */
+  skill_ids: z.array(z.string().min(1)).optional(),
+  /**
    * Agent-level env vars persisted to the DB and injected into every
    * session container. Same constraints as CreateSessionBody.env_vars.
    * Use for long-lived secrets like GITHUB_TOKEN or API keys the agent
@@ -809,9 +817,13 @@ export const HARNESS_CLAUDE_SDK = "claude-agent-sdk";
 // The session view attaches xterm.js directly.
 export const HARNESS_CLAUDE_CODE = "claude-code";
 export const HARNESS_CODEX = "codex";
+export const HARNESS_HERMES = "hermes";
+export const HARNESS_GEMINI = "gemini";
 export const TUI_HARNESSES: ReadonlySet<string> = new Set([
   HARNESS_CLAUDE_CODE,
   HARNESS_CODEX,
+  HARNESS_HERMES,
+  HARNESS_GEMINI,
 ]);
 
 /** True when the harness exposes a PTY over `/tty` (see `TUI_HARNESSES`). */
@@ -823,6 +835,8 @@ export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
   HARNESS_CLAUDE_SDK,
   HARNESS_CLAUDE_CODE,
   HARNESS_CODEX,
+  HARNESS_HERMES,
+  HARNESS_GEMINI,
 ]);
 
 // Resolves the container image for a harness at runtime from env vars.
@@ -837,6 +851,8 @@ export function resolveHarnessImage(
     K8S_HARNESS_IMAGE_CLAUDE_SDK?: string;
     K8S_HARNESS_IMAGE_CLAUDE_CODE?: string;
     K8S_HARNESS_IMAGE_CODEX?: string;
+    K8S_HARNESS_IMAGE_HERMES?: string;
+    K8S_HARNESS_IMAGE_GEMINI?: string;
   },
 ): string {
   const map: Record<string, string | undefined> = {
@@ -844,8 +860,15 @@ export function resolveHarnessImage(
     [HARNESS_OPENCODE]: harnessEnv.K8S_HARNESS_IMAGE_OPENCODE,
     [HARNESS_CLAUDE_CODE]: harnessEnv.K8S_HARNESS_IMAGE_CLAUDE_CODE,
     [HARNESS_CODEX]: harnessEnv.K8S_HARNESS_IMAGE_CODEX,
+    [HARNESS_HERMES]: harnessEnv.K8S_HARNESS_IMAGE_HERMES,
+    [HARNESS_GEMINI]: harnessEnv.K8S_HARNESS_IMAGE_GEMINI,
   };
-  return map[harness_id] ?? harnessEnv.K8S_HARNESS_IMAGE;
+  // `||` (not `??`): an empty string for a per-harness var must also fall
+  // back to the global default. Otherwise an accidentally-blanked secret
+  // entry (e.g. K8S_HARNESS_IMAGE_CLAUDE_CODE="") returns "" here and the
+  // Sandbox CR is created with image="", which k8s rejects with
+  // `spec.containers[0].image: Required value` on every session create.
+  return map[harness_id] || harnessEnv.K8S_HARNESS_IMAGE;
 }
 
 export const SESSION_CREATING_TIMEOUT_MS = 600_000;

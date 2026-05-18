@@ -11,9 +11,10 @@
  */
 
 import linear from "../providers/linear";
+import slack from "../providers/slack";
 import type { Integration } from "./types";
 
-const ALL: Integration[] = [linear];
+const ALL: Integration[] = [linear, slack];
 
 /** Every registered provider, including the disabled ones (their config is incomplete). */
 export function listProviders(): Integration[] {

@@ -15,7 +15,9 @@ harnesses/*/package-lock.json
 managed-tools/dist/
 managed-tools/node_modules/
 managed-tools/package-lock.json
-scripts/
+scripts/*.sh
+scripts/*.ts
+scripts/dashboard.py
 /.pnp
 .pnp.*
 .yarn/*

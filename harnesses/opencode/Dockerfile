@@ -24,13 +24,20 @@ FROM debian:bookworm-slim
 # To bump: update both ARGs together. SHA-256 is from the official
 # gh_<version>_checksums.txt file alongside the release.
 ARG GH_VERSION=2.92.0
-ARG GH_SHA256=8f8212b1a9cec261a8839e0893168f50d3fc70f095da257feef4229234cefdf8
+ARG GH_SHA256_AMD64=8f8212b1a9cec261a8839e0893168f50d3fc70f095da257feef4229234cefdf8
+ARG GH_SHA256_ARM64=34d620b7c884774ed86236541535170889fda0b99aafbdab8b69c7d458b5ca6b
+ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates bash python3 curl \
     && rm -rf /var/lib/apt/lists/* \
+    && case "${TARGETARCH}" in \
+         amd64) GH_ARCH=amd64; GH_SHA256="${GH_SHA256_AMD64}" ;; \
+         arm64) GH_ARCH=arm64; GH_SHA256="${GH_SHA256_ARM64}" ;; \
+         *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
     && curl -fsSL -o /tmp/gh.deb \
-         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.deb" \
+         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.deb" \
     && echo "${GH_SHA256}  /tmp/gh.deb" | sha256sum -c - \
     && dpkg -i /tmp/gh.deb \
     && rm /tmp/gh.deb \
