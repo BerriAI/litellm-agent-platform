@@ -34,6 +34,7 @@ import { env } from "@/server/env";
 import { getProvider } from "./registry";
 import type {
   Integration,
+  IntegrationAttachment,
   IntegrationEvent,
   SessionEvent,
 } from "./types";
@@ -97,7 +98,10 @@ export async function handleInbound(
   );
   if (!verified) return errorResponse(401, "bad signature");
 
-  const event = integration.webhook.parse(body.json, install);
+  // Providers can resolve auth-gated side content (e.g. Slack file URLs that
+  // need the bot token to download) inside `parse`, so the return value may
+  // be a Promise. Await unconditionally to handle both shapes.
+  const event = await integration.webhook.parse(body.json, install);
 
   if (event.kind === "ignore") {
     return new Response(null, { status: 204 });
@@ -132,6 +136,7 @@ export async function handleInbound(
       external_ref: event.external_ref ?? null,
       agent_id: binding.agent.agent_id,
       prompt: event.prompt,
+      attachments: event.attachments,
     });
 
     return new Response(null, { status: 202 });
@@ -232,6 +237,8 @@ interface SpawnInput {
   external_ref: string | null;
   agent_id: string;
   prompt: string;
+  /** Image / file uploads to forward to the harness as multimodal parts. */
+  attachments?: IntegrationAttachment[];
 }
 
 async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
@@ -250,16 +257,20 @@ async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
       body: JSON.stringify({
         initial_prompt: input.prompt,
         title: input.external_ref ?? "integration task",
+        initial_attachments: input.attachments,
       }),
     });
     if (!res.ok) {
       throw new Error(`session create failed: ${res.status} ${await res.text()}`);
     }
-    const session = (await res.json()) as { session_id: string };
+    // The v1 session-create route returns the new row keyed by `id`
+    // (`toApiSession` renames `session_id` → `id`). Read the canonical
+    // field rather than the DB column name.
+    const session = (await res.json()) as { id: string };
     await prisma.integrationSession.create({
       data: {
         external_session_id: input.external_session_id,
-        session_id: session.session_id,
+        session_id: session.id,
         binding_id: input.binding_id,
         external_ref: input.external_ref,
       },
@@ -268,7 +279,7 @@ async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
     // the initial_prompt is processed once the pod is up. Poll for the
     // resulting Session.response and forward it to the integration so the
     // user actually gets the agent's answer back in their medium.
-    void pollAndForwardInitialResponse(session.session_id);
+    void pollAndForwardInitialResponse(session.id);
   } catch (err) {
     console.error("[integrations/dispatcher] spawn failed:", err);
     // Surface the failure to the medium so the user isn't left hanging.
@@ -294,7 +305,19 @@ async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
 async function sendFollowupToSession(args: {
   session_id: string;
   body: string;
+  /**
+   * Image / file uploads on the followup message. Dropped today: the
+   * v1 `/sessions/{id}/message` endpoint is text-only. Tracked as a
+   * follow-up — initial images on a new thread already cover the primary
+   * Slack use case; in-thread image followups land in a v2 PR.
+   */
+  attachments?: IntegrationAttachment[];
 }): Promise<void> {
+  if (args.attachments && args.attachments.length > 0) {
+    console.warn(
+      `[integrations/dispatcher] dropping ${args.attachments.length} attachment(s) on followup — not yet supported on the message endpoint`,
+    );
+  }
   const baseUrl = process.env.BASE_URL ?? "http://localhost:3000";
   const url = `${baseUrl}/api/v1/managed_agents/sessions/${encodeURIComponent(
     args.session_id,
@@ -358,6 +381,7 @@ async function handleMessage(input: {
     void sendFollowupToSession({
       session_id: existing.session_id,
       body: event.prompt,
+      attachments: event.attachments,
     });
     return new Response(null, { status: 202 });
   }
@@ -390,6 +414,7 @@ async function handleMessage(input: {
     external_ref: event.external_ref ?? null,
     agent_id: binding.agent.agent_id,
     prompt: event.prompt,
+    attachments: event.attachments,
   });
 
   return new Response(null, { status: 202 });

@@ -232,9 +232,55 @@ export function toApiSkill(row: { skill_id: string; name: string; description: s
   };
 }
 
+/**
+ * Hard cap per attachment when starting a session. Anything bigger is a
+ * 400 — Claude's per-request total is 32 MB across all content blocks and
+ * base64 inflates payload size by ~33%.
+ */
+export const INITIAL_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+export const INITIAL_ATTACHMENTS_MAX_COUNT = 10;
+/** Supported MIME types for inline binary content on session create. Today
+ *  just images — vision-only; not parsing PDFs or other formats yet. */
+const INITIAL_ATTACHMENT_ALLOWED_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+const InitialAttachment = z.object({
+  name: z.string().max(255).optional(),
+  mime_type: z
+    .string()
+    .refine((m) => INITIAL_ATTACHMENT_ALLOWED_MIME.has(m), {
+      message: `mime_type must be one of: ${[...INITIAL_ATTACHMENT_ALLOWED_MIME].join(", ")}`,
+    }),
+  base64: z
+    .string()
+    .min(1)
+    .refine(
+      (s) => {
+        // Rough size check: 4 base64 chars ≈ 3 bytes, so length * 0.75 ≈ bytes.
+        return s.length * 0.75 <= INITIAL_ATTACHMENT_MAX_BYTES;
+      },
+      { message: `attachment exceeds ${INITIAL_ATTACHMENT_MAX_BYTES} bytes` },
+    ),
+});
+
 export const CreateSessionBody = z.object({
   initial_prompt: z.string().optional(),
   title: z.string().optional(),
+  /**
+   * Binary content (images today) attached to `initial_prompt`. Sent to the
+   * harness as Claude-format multimodal parts alongside the text. Used by
+   * integrations (e.g. Slack image uploads) so the agent can reason about
+   * pictures the user pasted. Each entry's `base64` is the raw file bytes —
+   * server-side only, never persisted, never logged by value.
+   */
+  initial_attachments: z
+    .array(InitialAttachment)
+    .max(INITIAL_ATTACHMENTS_MAX_COUNT)
+    .optional(),
   /**
    * Per-session env vars forwarded into the harness shell at Sandbox CR
    * create time. Use for short-lived secrets like `GITHUB_TOKEN` or

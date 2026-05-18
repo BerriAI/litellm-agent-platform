@@ -73,10 +73,17 @@ interface BringUpResult {
   response: HarnessMessageResponse | null;
 }
 
+interface InitialAttachment {
+  name?: string;
+  mime_type: string;
+  base64: string;
+}
+
 interface BringUpBody {
   initial_prompt?: string;
   title?: string;
   env_vars?: Record<string, string>;
+  initial_attachments?: InitialAttachment[];
 }
 
 // ---------------------------------------------------------------------------
@@ -325,8 +332,15 @@ async function finishBringUp(
   // persist the reply; on failure we log + best-effort write the reason.
   // The .catch is critical: an unhandled rejection here would crash the
   // Node process since this promise is no longer awaited.
-  if (body.initial_prompt) {
-    void runInitialPrompt(agent, session_id, sandbox_url, harness_session_id, body.initial_prompt);
+  if (body.initial_prompt || (body.initial_attachments && body.initial_attachments.length > 0)) {
+    void runInitialPrompt(
+      agent,
+      session_id,
+      sandbox_url,
+      harness_session_id,
+      body.initial_prompt ?? "",
+      body.initial_attachments,
+    );
   }
   return { updated, response: null };
 }
@@ -343,13 +357,33 @@ async function runInitialPrompt(
   sandbox_url: string,
   harness_session_id: string,
   initial_prompt: string,
+  initial_attachments?: InitialAttachment[],
 ): Promise<void> {
   try {
+    // Build Claude-format multimodal parts when attachments are present.
+    // Text part first, then each image as a base64 source — matches the
+    // Anthropic API content-block shape, which the claude-agent-sdk harness
+    // forwards verbatim. `HarnessMessagePart` is intentionally permissive
+    // (`[key: string]: unknown`) so the extra `source` field passes through.
+    const parts =
+      initial_attachments && initial_attachments.length > 0
+        ? [
+            ...(initial_prompt ? [{ type: "text", text: initial_prompt }] : []),
+            ...initial_attachments.map((a) => ({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: a.mime_type,
+                data: a.base64,
+              },
+            })),
+          ]
+        : expandMessage(initial_prompt);
     const response = await harnessSendMessage({
       sandbox_url,
       harness_session_id,
       model: agent.model,
-      parts: expandMessage(initial_prompt),
+      parts,
     });
     await prisma.session.update({
       where: { session_id },

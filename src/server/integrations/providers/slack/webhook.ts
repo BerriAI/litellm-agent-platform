@@ -35,6 +35,7 @@ import type {
   IntegrationEvent,
   WebhookAdapter,
 } from "../../core/types";
+import { fetchAttachments, type SlackFile } from "./files";
 
 const SIG_HEADER = "x-slack-signature";
 const TS_HEADER = "x-slack-request-timestamp";
@@ -58,6 +59,7 @@ interface SlackEvent {
   text?: string;
   ts?: string;
   thread_ts?: string;
+  files?: SlackFile[]; // image / file uploads on the message
 }
 
 function getSigningSecret(): string | null {
@@ -120,7 +122,7 @@ export function buildWebhookAdapter(): WebhookAdapter {
       return safeEqualHex(sig, expected);
     },
 
-    parse(payload, install: IntegrationInstall): IntegrationEvent {
+    async parse(payload, install: IntegrationInstall): Promise<IntegrationEvent> {
       const env = payload as SlackEventEnvelope;
       if (env?.type !== "event_callback") return { kind: "ignore" };
 
@@ -155,7 +157,16 @@ export function buildWebhookAdapter(): WebhookAdapter {
       if (!channel || !teamId) return { kind: "ignore" };
 
       const text = stripMentions(e.text);
-      if (!text) return { kind: "ignore" };
+      // Pull image bytes from Slack before handing the event to the
+      // dispatcher — the agent's sandbox can't authenticate against Slack's
+      // private file URLs, so the download has to happen here while we still
+      // hold the bot token.
+      const attachments = await fetchAttachments(e.files, install);
+
+      // Ignore the event only when there's NEITHER text NOR attachments
+      // (e.g. an empty @mention or a join notification). An image with no
+      // caption is still a valid prompt.
+      if (!text && attachments.length === 0) return { kind: "ignore" };
 
       const externalSessionId = conversationKey(
         teamId,
@@ -169,6 +180,7 @@ export function buildWebhookAdapter(): WebhookAdapter {
         kind: "message",
         external_session_id: externalSessionId,
         prompt: text,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
     },
   };

@@ -85,8 +85,15 @@ export interface WebhookAdapter {
    * Translate the medium's wire format into a canonical `IntegrationEvent`.
    * Returns `{ kind: "ignore" }` for events we don't care about (e.g. the
    * agent's own activity echoing back).
+   *
+   * May return a Promise so providers can resolve auth-gated side-content
+   * (e.g. Slack file URLs require the bot token to download) before handing
+   * the dispatcher a fully self-contained event.
    */
-  parse(payload: unknown, install: IntegrationInstall): IntegrationEvent;
+  parse(
+    payload: unknown,
+    install: IntegrationInstall,
+  ): IntegrationEvent | Promise<IntegrationEvent>;
 
   /**
    * Extract the medium's workspace id from the payload so the dispatcher can
@@ -123,6 +130,30 @@ export interface InstallMetadata {
 }
 
 /**
+ * Binary content carried with an inbound message (Slack file uploads, etc.).
+ *
+ * The webhook adapter resolves the medium's private URL into bytes — Slack's
+ * `url_private` needs an `Authorization: Bearer <bot_token>` header that only
+ * the server holds — and hands the dispatcher a self-contained blob. The
+ * dispatcher passes it through to the v1 session create API, which lifts
+ * each attachment into a Claude-format multimodal message part for the
+ * harness alongside the text prompt.
+ *
+ * Size cap: providers SHOULD reject files larger than ~5 MB before reaching
+ * the dispatcher. Base64 inflates bytes by ~33%, and Claude's per-request
+ * cap is 32 MB total across all content blocks.
+ */
+export interface IntegrationAttachment {
+  /** Original filename (best-effort; some mediums don't expose one). */
+  name: string;
+  /** MIME type, e.g. "image/png". Required so the harness can route to vision. */
+  mime_type: string;
+  /** Raw bytes, base64-encoded. The agent's sandbox can't authenticate
+   *  against the medium's private file URLs, so we inline the content. */
+  base64: string;
+}
+
+/**
  * Inbound event — what an integration translates a raw webhook payload into.
  * The dispatcher acts on the kind tag.
  */
@@ -133,8 +164,15 @@ export type IntegrationEvent =
       prompt: string;
       /** Optional human label (e.g. "LIT-1234") used in logs and the first thought ack. */
       external_ref?: string;
+      /** Image / file uploads attached to the inbound message. */
+      attachments?: IntegrationAttachment[];
     }
-  | { kind: "followup"; external_session_id: string; body: string }
+  | {
+      kind: "followup";
+      external_session_id: string;
+      body: string;
+      attachments?: IntegrationAttachment[];
+    }
   | { kind: "cancel"; external_session_id: string }
   /**
    * Messaging-style mediums (Slack, Discord, …) can't tell from the webhook
@@ -150,6 +188,8 @@ export type IntegrationEvent =
       external_session_id: string;
       prompt: string;
       external_ref?: string;
+      /** Image / file uploads attached to the inbound message. */
+      attachments?: IntegrationAttachment[];
     }
   | { kind: "ignore" };
 
