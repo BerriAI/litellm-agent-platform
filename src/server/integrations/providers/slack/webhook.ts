@@ -181,6 +181,10 @@ export function buildWebhookAdapter(): WebhookAdapter {
         external_session_id: externalSessionId,
         prompt: text,
         attachments: attachments.length > 0 ? attachments : undefined,
+        // Preserve the inbound message ts so the dispatcher can anchor an
+        // immediate `:eyes:` reaction on the user's actual message rather
+        // than the thread root.
+        original_ts: e.ts,
       };
     },
   };
