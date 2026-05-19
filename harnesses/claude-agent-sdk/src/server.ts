@@ -35,6 +35,10 @@ import {
   buildMemoryMcpServer,
   MEMORY_TOOL_NAMES,
 } from "./memory-tools.js";
+import {
+  buildSkillMcpServer,
+  SKILL_TOOL_NAMES,
+} from "./skill-tools.js";
 
 // SDK's auto-resolution of the Claude Code native binary fails when
 // `process.cwd()` differs from the SDK's install location (we run with
@@ -63,6 +67,11 @@ const CLAUDE_BIN = resolveClaudeBinary();
 // Returns null when LAP_BASE_URL/AGENT_ID/LAP_AUTH_TOKEN aren't all set, so
 // local dev without the platform reachable still works (tools just absent).
 const MEMORY_MCP = buildMemoryMcpServer();
+
+// Companion MCP server exposing save_skill / list_skills / delete_skill.
+// Same env contract as memory — both return null together when the LAP
+// platform isn't reachable, so local-dev semantics stay consistent.
+const SKILLS_MCP = buildSkillMcpServer();
 
 // ---------------------------------------------------------------------------
 // Config
@@ -236,12 +245,20 @@ async function runTurn(
     // surfaces render answerable question cards.
     disallowedTools: ["AskUserQuestion"],
     ...(CLAUDE_BIN ? { pathToClaudeCodeExecutable: CLAUDE_BIN } : {}),
-    // Memory tools: only register when the in-process server was built (i.e.
-    // LAP env vars are set). Names are namespaced `mcp__<server>__<tool>`.
-    ...(MEMORY_MCP
+    // Managed tools (memory + skills): only register when the in-process
+    // servers were built (i.e. LAP env vars are set). Names are namespaced
+    // `mcp__<server>__<tool>`. Each MCP is independently optional so a
+    // half-configured env still gets whatever it can.
+    ...(MEMORY_MCP || SKILLS_MCP
       ? {
-          mcpServers: { "lap-memory": MEMORY_MCP },
-          allowedTools: [...MEMORY_TOOL_NAMES],
+          mcpServers: {
+            ...(MEMORY_MCP ? { "lap-memory": MEMORY_MCP } : {}),
+            ...(SKILLS_MCP ? { "lap-skills": SKILLS_MCP } : {}),
+          },
+          allowedTools: [
+            ...(MEMORY_MCP ? MEMORY_TOOL_NAMES : []),
+            ...(SKILLS_MCP ? SKILL_TOOL_NAMES : []),
+          ],
         }
       : {}),
     // Resume the SDK's persisted session if we have one — that's how the

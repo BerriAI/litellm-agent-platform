@@ -11,3 +11,23 @@ export {
   type SaveMemoryInput,
   type SearchMemoryInput,
 } from "./memory.js";
+
+export {
+  skillsEnv,
+  saveSkillSchema,
+  listSkillsSchema,
+  deleteSkillSchema,
+  saveSkillDescription,
+  listSkillsDescription,
+  deleteSkillDescription,
+  callSaveSkill,
+  callListSkills,
+  callDeleteSkill,
+  slugifySkillName,
+  ensureSkillFrontmatter,
+  type SkillsEnv,
+  type SkillsToolResult,
+  type SaveSkillInput,
+  type ListSkillsInput,
+  type DeleteSkillInput,
+} from "./skills.js";

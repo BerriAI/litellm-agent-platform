@@ -13,6 +13,10 @@
     "./memory": {
       "types": "./dist/memory.d.ts",
       "default": "./dist/memory.js"
+    },
+    "./skills": {
+      "types": "./dist/skills.d.ts",
+      "default": "./dist/skills.js"
     }
   },
   "files": ["dist", "src"],
