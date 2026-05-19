@@ -225,7 +225,20 @@ export interface EventAnchor {
  * agentActivityCreate, Slack's chat.postMessage).
  */
 export type SessionEvent =
-  | { type: "thought"; body: string }
+  | {
+      type: "thought";
+      body: string;
+      /**
+       * Clickable links to render alongside the thought, where the medium
+       * supports them. Used by the dispatcher's "Setting up an agent
+       * session." ack to point the user at the LAP agent / session page
+       * while the sandbox is still warming up. Providers render in their
+       * native syntax (Slack mrkdwn `<url|label>`, Linear markdown
+       * `[label](url)`); providers that can't render hyperlinks should
+       * leave them out.
+       */
+      externalUrls?: { url: string; label: string }[];
+    }
   | { type: "action"; action: string; parameter: string; result?: string }
   | { type: "response"; body: string; externalUrls?: { url: string; label: string }[] }
   | { type: "error"; body: string }

@@ -59,13 +59,31 @@ function decodeKey(external_session_id: string): DecodedKey | null {
   return { team_id, channel, thread_ts };
 }
 
+/**
+ * Render externalUrls as Slack mrkdwn link suffixes — `<url|label>` joined by
+ * " · " and prefixed with a separator. Returns an empty string when there
+ * are no links so the caller can unconditionally concatenate.
+ */
+function renderExternalUrlsSuffix(
+  externalUrls: { url: string; label: string }[] | undefined,
+): string {
+  if (!externalUrls || externalUrls.length === 0) return "";
+  const rendered = externalUrls
+    .map((link) => `<${link.url}|${link.label}>`)
+    .join(" · ");
+  return ` ${rendered}`;
+}
+
 function bodyFor(event: SessionEvent): string | null {
   switch (event.type) {
     case "thought":
       // Render as italicized note so it visually separates from real replies.
-      return `_${event.body}_`;
+      // Any externalUrls (e.g. the dispatcher's link to the LAP agent page)
+      // are appended OUTSIDE the italic so they render as clickable links
+      // rather than italicized text.
+      return `_${event.body}_${renderExternalUrlsSuffix(event.externalUrls)}`;
     case "response":
-      return event.body;
+      return `${event.body}${renderExternalUrlsSuffix(event.externalUrls)}`;
     case "elicit":
       return event.body;
     case "error":

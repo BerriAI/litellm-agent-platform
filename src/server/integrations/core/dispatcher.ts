@@ -68,6 +68,33 @@ function errorResponse(status: number, error: string): Response {
   });
 }
 
+/**
+ * Build the public LAP URL for an agent page. Used to add a clickable link
+ * to the dispatcher's "thought" acks so the user can jump straight to the
+ * agent on LAP while the sandbox is still warming up.
+ *
+ * Precedence: UI_PUBLIC_BASE_URL → LAP_BASE_URL → BASE_URL. UI_PUBLIC_BASE_URL
+ * is the explicit public UI hostname (set when the UI is served from a
+ * different origin than the API). LAP_BASE_URL is the canonical external URL
+ * the memory tools already rely on (and which the env loader auto-populates
+ * from RENDER_EXTERNAL_URL on Render). BASE_URL is the last-resort fallback
+ * — fine for `next dev` but typically internal in production.
+ *
+ * Returns null when no usable base URL is configured (e.g. tests, or a dev
+ * setup where the link would be meaningless). Callers should pass through
+ * the absence so providers can fall back to a link-less message.
+ */
+function buildAgentUrl(agentId: string): string | null {
+  const raw =
+    process.env.UI_PUBLIC_BASE_URL ||
+    process.env.LAP_BASE_URL ||
+    process.env.BASE_URL ||
+    "";
+  if (!raw) return null;
+  const base = raw.replace(/\/+$/, "");
+  return `${base}/agents/${encodeURIComponent(agentId)}`;
+}
+
 export async function handleInbound(
   integrationId: string,
   req: Request,
@@ -118,12 +145,16 @@ export async function handleInbound(
 
     // ACK inside the medium's deadline (Linear: 10s). The session spawn
     // below is fire-and-forget so we don't block this response.
+    const newTaskAgentUrl = buildAgentUrl(binding.agent.agent_id);
     await integration.onSessionEvent({
       install,
       externalSessionId: event.external_session_id,
       event: {
         type: "thought",
         body: `Picking up ${event.external_ref ?? "task"}.`,
+        externalUrls: newTaskAgentUrl
+          ? [{ url: newTaskAgentUrl, label: "Open in LAP" }]
+          : undefined,
       },
       agent: binding.agent,
     });
@@ -422,13 +453,21 @@ async function handleMessage(input: {
 
   // Text ack in-thread, fire-and-forget. Lets the user see we picked up
   // the work before the sandbox finishes bring-up (~10-60s on a cold
-  // start). We have `binding.agent` here so the provider can build a
-  // link to the agent / session page.
+  // start). We have `binding.agent` here so we can include a link to
+  // the agent page on LAP — clicking it lands the user on the agent's
+  // session list while the new session is spinning up.
+  const agentUrl = buildAgentUrl(binding.agent.agent_id);
   void integration
     .onSessionEvent({
       install,
       externalSessionId: event.external_session_id,
-      event: { type: "thought", body: "Setting up an agent session." },
+      event: {
+        type: "thought",
+        body: "Setting up an agent session.",
+        externalUrls: agentUrl
+          ? [{ url: agentUrl, label: "Open in LAP" }]
+          : undefined,
+      },
       agent: binding.agent,
     })
     .catch((err) => {

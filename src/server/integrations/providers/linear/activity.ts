@@ -42,10 +42,31 @@ interface LinearActivityContent {
   result?: string;
 }
 
+/**
+ * Render externalUrls as a markdown-link suffix appended to the body, e.g.
+ *   "Setting up an agent session. ([Open in LAP](https://...))"
+ *
+ * Linear's agentActivityCreate `content.body` field supports markdown, so a
+ * `[label](url)` link renders as clickable. Returns an empty string when no
+ * links are present so callers can unconditionally concatenate.
+ */
+function renderExternalUrlsSuffix(
+  externalUrls: { url: string; label: string }[] | undefined,
+): string {
+  if (!externalUrls || externalUrls.length === 0) return "";
+  const rendered = externalUrls
+    .map((link) => `[${link.label}](${link.url})`)
+    .join(" · ");
+  return ` (${rendered})`;
+}
+
 function sessionEventToContent(event: SessionEvent): LinearActivityContent | null {
   switch (event.type) {
     case "thought":
-      return { type: "thought", body: event.body };
+      return {
+        type: "thought",
+        body: `${event.body}${renderExternalUrlsSuffix(event.externalUrls)}`,
+      };
     case "action":
       return event.result === undefined
         ? { type: "action", action: event.action, parameter: event.parameter }
