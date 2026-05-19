@@ -225,7 +225,17 @@ export interface EventAnchor {
  * agentActivityCreate, Slack's chat.postMessage).
  */
 export type SessionEvent =
-  | { type: "thought"; body: string }
+  | {
+      type: "thought";
+      body: string;
+      /**
+       * Optional links the provider should attach to the thought (e.g. a
+       * pointer to the LAP agent / session page on the dispatch ack so the
+       * user can jump from Slack to the live session view). Mirrors the
+       * field already present on `response`.
+       */
+      externalUrls?: { url: string; label: string }[];
+    }
   | { type: "action"; action: string; parameter: string; result?: string }
   | { type: "response"; body: string; externalUrls?: { url: string; label: string }[] }
   | { type: "error"; body: string }

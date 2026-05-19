@@ -221,6 +221,20 @@ function findIntegrationSession(session_id: string) {
   });
 }
 
+/**
+ * Resolve the public LAP URL for an agent's dashboard page. Prefers
+ * `LAP_BASE_URL` (the external https URL the UI is served from) and falls
+ * back to `BASE_URL`. Returns `null` if neither is set so callers can omit
+ * the link rather than dropping a `http://localhost:3000/...` URL into a
+ * production Slack channel.
+ */
+function buildAgentDashboardUrl(agent_id: string): string | null {
+  const base = process.env.LAP_BASE_URL || process.env.BASE_URL;
+  if (!base) return null;
+  const host = base.replace(/\/+$/, "");
+  return `${host}/agents/${encodeURIComponent(agent_id)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Internal: spawn a LAP Session via the existing v1 route.
 //
@@ -424,11 +438,18 @@ async function handleMessage(input: {
   // the work before the sandbox finishes bring-up (~10-60s on a cold
   // start). We have `binding.agent` here so the provider can build a
   // link to the agent / session page.
+  const agentUrl = buildAgentDashboardUrl(binding.agent.agent_id);
   void integration
     .onSessionEvent({
       install,
       externalSessionId: event.external_session_id,
-      event: { type: "thought", body: "Setting up an agent session." },
+      event: {
+        type: "thought",
+        body: "Setting up an agent session.",
+        externalUrls: agentUrl
+          ? [{ url: agentUrl, label: "Open in LAP" }]
+          : undefined,
+      },
       agent: binding.agent,
     })
     .catch((err) => {

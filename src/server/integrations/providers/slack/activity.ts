@@ -60,6 +60,19 @@ function decodeKey(external_session_id: string): DecodedKey | null {
   return { team_id, channel, thread_ts };
 }
 
+/**
+ * Render `externalUrls` as Slack mrkdwn link suffixes. Slack uses
+ * `<url|label>` rather than `[label](url)`, so build it explicitly here
+ * instead of leaning on a markdown renderer. Returns an empty string when
+ * the list is missing/empty so callers can append unconditionally.
+ */
+function formatLinks(
+  urls: { url: string; label: string }[] | undefined,
+): string {
+  if (!urls || urls.length === 0) return "";
+  return " " + urls.map((u) => `<${u.url}|${u.label}>`).join(" · ");
+}
+
 function bodyFor(event: SessionEvent): string | null {
   switch (event.type) {
     case "thought":
