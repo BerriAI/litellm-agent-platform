@@ -222,23 +222,10 @@ function findIntegrationSession(session_id: string) {
 }
 
 /**
- * Resolve the public LAP URL for an agent's dashboard page. Prefers
- * `LAP_BASE_URL` (the external https URL the UI is served from) and falls
- * back to `BASE_URL`. Returns `null` if neither is set so callers can omit
- * the link rather than dropping a `http://localhost:3000/...` URL into a
- * production Slack channel.
- */
-function buildAgentDashboardUrl(agent_id: string): string | null {
-  const base = process.env.LAP_BASE_URL || process.env.BASE_URL;
-  if (!base) return null;
-  const host = base.replace(/\/+$/, "");
-  return `${host}/agents/${encodeURIComponent(agent_id)}`;
-}
-
-/**
- * Resolve the public LAP URL for a session page. Same env-var precedence
- * as `buildAgentDashboardUrl`; returns null when neither var is set so
- * the integration omits the link rather than emitting a localhost URL.
+ * Resolve the public LAP URL for a session page. Prefers `LAP_BASE_URL`
+ * (the external https URL the UI is served from) and falls back to
+ * `BASE_URL`. Returns `null` when neither is set so the integration omits
+ * the link rather than emitting a localhost URL into a production channel.
  */
 function buildSessionUrl(session_id: string): string | null {
   const base = process.env.LAP_BASE_URL || process.env.BASE_URL;
@@ -279,7 +266,17 @@ interface SpawnInput {
   attachments?: IntegrationAttachment[];
 }
 
-async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
+/**
+ * Spawn a Session for an integration `new_task`. Returns the new
+ * `session_id` on success so the caller can include a deep link in the
+ * follow-up ack ("Open in LAP" → /sessions/<id>). Returns null when spawn
+ * fails — this function has already forwarded an `error` event to the
+ * medium in that case, so the caller should NOT send the "Setting up …"
+ * ack on top of it.
+ */
+async function spawnSessionForEvent(
+  input: SpawnInput,
+): Promise<{ session_id: string } | null> {
   const baseUrl = process.env.BASE_URL ?? "http://localhost:3000";
   const url = `${baseUrl}/api/v1/managed_agents/agents/${encodeURIComponent(
     input.agent_id,
@@ -318,6 +315,7 @@ async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
     // resulting Session.response and forward it to the integration so the
     // user actually gets the agent's answer back in their medium.
     void pollAndForwardInitialResponse(session.id);
+    return { session_id: session.id };
   } catch (err) {
     console.error("[integrations/dispatcher] spawn failed:", err);
     // Surface the failure to the medium so the user isn't left hanging.
@@ -340,6 +338,7 @@ async function spawnSessionForEvent(input: SpawnInput): Promise<void> {
           /* best-effort */
         });
     }
+    return null;
   }
 }
 
@@ -459,30 +458,6 @@ async function handleMessage(input: {
     return errorResponse(404, "no agent bound to this install");
   }
 
-  // Text ack in-thread, fire-and-forget. Lets the user see we picked up
-  // the work before the sandbox finishes bring-up (~10-60s on a cold
-  // start). We have `binding.agent` here so the provider can build a
-  // link to the agent / session page.
-  const agentUrl = buildAgentDashboardUrl(binding.agent.agent_id);
-  void integration
-    .onSessionEvent({
-      install,
-      externalSessionId: event.external_session_id,
-      event: {
-        type: "thought",
-        body: "Setting up an agent session.",
-        externalUrls: agentUrl
-          ? [{ url: agentUrl, label: "Open in LAP" }]
-          : undefined,
-      },
-      agent: binding.agent,
-    })
-    .catch((err) => {
-      console.warn(
-        `[integrations/dispatcher] thought ack failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
-
   if (existing && !reusable) {
     // Drop the stale row so the unique constraint on external_session_id
     // doesn't block the upcoming `integrationSession.create` for the new
@@ -494,16 +469,47 @@ async function handleMessage(input: {
       });
   }
 
-  void spawnSessionForEvent({
-    integration,
-    install_id: install.install_id,
-    binding_id: binding.binding_id,
-    external_session_id: event.external_session_id,
-    external_ref: event.external_ref ?? null,
-    agent_id: binding.agent.agent_id,
-    prompt: event.prompt,
-    attachments: event.attachments,
-  });
+  // Spawn first, ack after — we want the "Open in LAP" button to point at
+  // the actual /sessions/<id> page, not a generic agent dashboard, so the
+  // user clicking it lands on their thread's session. Session create just
+  // inserts a row (bring-up is async), so this adds <1s to the ack and
+  // keeps the eyes 👀 react above as the immediate "we got it" signal.
+  //
+  // If spawn fails it has already forwarded an `error` event to the medium,
+  // so we skip the "Setting up …" ack to avoid posting a contradictory
+  // success message.
+  void (async () => {
+    const spawned = await spawnSessionForEvent({
+      integration,
+      install_id: install.install_id,
+      binding_id: binding.binding_id,
+      external_session_id: event.external_session_id,
+      external_ref: event.external_ref ?? null,
+      agent_id: binding.agent.agent_id,
+      prompt: event.prompt,
+      attachments: event.attachments,
+    });
+    if (!spawned) return;
+    const sessionUrl = buildSessionUrl(spawned.session_id);
+    await integration
+      .onSessionEvent({
+        install,
+        externalSessionId: event.external_session_id,
+        event: {
+          type: "thought",
+          body: "Setting up an agent session.",
+          externalUrls: sessionUrl
+            ? [{ url: sessionUrl, label: "Open in LAP" }]
+            : undefined,
+        },
+        agent: binding.agent,
+      })
+      .catch((err) => {
+        console.warn(
+          `[integrations/dispatcher] thought ack failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  })();
 
   return new Response(null, { status: 202 });
 }
