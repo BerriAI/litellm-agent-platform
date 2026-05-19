@@ -67,7 +67,7 @@ export function AgentAsToolPicker({
   }
 
   const available = agents.filter(
-    (a) => !value.some((t, _idx) => t.agent_id === a.agent_id) || true,
+    (a) => !value.some((t) => t.agent_id === a.agent_id),
   );
 
   return (
