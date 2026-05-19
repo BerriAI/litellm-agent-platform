@@ -117,16 +117,21 @@ COPY --from=builder --chown=nextjs:nodejs /app/src/worker ./src/worker
 COPY --from=builder --chown=nextjs:nodejs /app/agent_templates.json ./agent_templates.json
 COPY --from=builder --chown=nextjs:nodejs /app/agent-templates ./agent-templates
 
-# TCP proxy. ARG + sha256 check ensures the correct file is baked in even if
-# Docker re-uses a cached COPY layer from ECR.
+# server-proxy.mjs: use RUN --mount=bind so the layer hash includes GIT_SHA
+# in the command text, preventing ECR from deduplicating it with any old layer.
+# (COPY layers have been observed to be served from ECR cache despite --no-cache
+# builds producing the correct content in the local BuildKit CAS.)
 ARG GIT_SHA=unknown
 ARG SERVER_PROXY_SHA256=unknown
-COPY --chown=nextjs:nodejs server-proxy.mjs ./server-proxy.mjs
-RUN actual=$(sha256sum /app/server-proxy.mjs | awk '{print $1}') && \
-    echo "server-proxy.mjs sha256: $actual (expected: $SERVER_PROXY_SHA256)" && \
+RUN --mount=type=bind,source=server-proxy.mjs,target=/tmp/server-proxy-src.mjs \
+    echo "baking server-proxy.mjs from commit $GIT_SHA" && \
+    cp /tmp/server-proxy-src.mjs /app/server-proxy.mjs && \
+    chown nextjs:nodejs /app/server-proxy.mjs && \
+    actual=$(sha256sum /app/server-proxy.mjs | awk '{print $1}') && \
+    echo "server-proxy.mjs sha256: $actual" && \
     [ "$SERVER_PROXY_SHA256" = "unknown" ] || \
     [ "$actual" = "$SERVER_PROXY_SHA256" ] || \
-    (echo "FATAL: server-proxy.mjs hash mismatch — baked wrong file" && exit 1)
+    (echo "FATAL: hash mismatch — expected $SERVER_PROXY_SHA256 got $actual" && exit 1)
 
 USER nextjs
 EXPOSE 3000
