@@ -1,5 +1,9 @@
 # opencode harness
 #
+# Supports two modes via OPENCODE_MODE env var (default: tui):
+#   tui   — WebSocket PTY bridge (Node server.js + tmux) for interactive use
+#   serve — opencode's built-in HTTP server for programmatic sessions
+#
 # Build from repo root:
 #   docker buildx build -f harnesses/opencode/Dockerfile -t opencode-sandbox:dev .
 
@@ -29,7 +33,7 @@ ARG GH_SHA256_ARM64=34d620b7c884774ed86236541535170889fda0b99aafbdab8b69c7d458b5
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates bash python3 curl \
+      git ca-certificates bash python3 curl tmux make g++ python3-dev \
     && rm -rf /var/lib/apt/lists/* \
     && case "${TARGETARCH}" in \
          amd64) GH_ARCH=amd64; GH_SHA256="${GH_SHA256_AMD64}" ;; \
@@ -45,8 +49,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /work \
     && chown sandbox:sandbox /work
 
+ENV PORT=4096
+ENV REPO_DIR=/work/repo
+ENV OPENCODE_MODE=tui
+ENV TERM=xterm-256color
+
 COPY --from=installer --chown=sandbox:sandbox /root/.opencode /home/sandbox/.opencode
 ENV PATH="/home/sandbox/.opencode/bin:${PATH}"
+
+# Install Node.js for the WebSocket PTY bridge (TUI mode).
+# node:20 ships with npm; we install it from the NodeSource deb for a lean
+# single-layer install that shares the base debian-slim image.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY harnesses/opencode/package.json ./
+RUN npm install --no-audit --no-fund
+COPY harnesses/opencode/server.js ./
 
 WORKDIR /work
 

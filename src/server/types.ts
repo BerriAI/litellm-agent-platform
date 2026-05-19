@@ -887,6 +887,7 @@ export const HARNESS_CODEX = "codex";
 export const HARNESS_HERMES = "hermes";
 export const HARNESS_GEMINI = "gemini";
 export const TUI_HARNESSES: ReadonlySet<string> = new Set([
+  HARNESS_OPENCODE,
   HARNESS_CLAUDE_CODE,
   HARNESS_CODEX,
   HARNESS_HERMES,

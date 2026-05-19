@@ -2,6 +2,15 @@
 # opencode harness entrypoint.
 # All common setup (vault, git clone, LAP_FILE injection, phase reporting) is
 # handled by the shared script. See harnesses/_shared/entrypoint-common.sh.
+#
+# Two modes, selected by OPENCODE_MODE (default: tui):
+#
+#   tui    — WebSocket PTY bridge (Node server.js) wraps opencode in a tmux
+#            session so the TUI survives WS reconnects. The LAP platform UI
+#            connects via /tty WebSocket. This is the primary interactive mode.
+#
+#   serve  — opencode's built-in HTTP server (`opencode serve`). Useful for
+#            automated/scripted sessions that talk JSON over HTTP.
 set -euo pipefail
 
 . /opt/lap/common.sh
@@ -52,7 +61,14 @@ ${AGENT_PROMPT}
 EOF2
 fi
 
-echo "[entrypoint] booting opencode serve on 0.0.0.0:${PORT}"
-echo "[entrypoint] base=${BASE} model=${LITELLM_DEFAULT_MODEL} repo=${REPO_DIR}"
+OPENCODE_MODE="${OPENCODE_MODE:-tui}"
 
-exec opencode serve --hostname 0.0.0.0 --port "$PORT"
+if [ "$OPENCODE_MODE" = "serve" ]; then
+  echo "[entrypoint] booting opencode serve on 0.0.0.0:${PORT}"
+  echo "[entrypoint] base=${BASE} model=${LITELLM_DEFAULT_MODEL} repo=${REPO_DIR}"
+  exec opencode serve --hostname 0.0.0.0 --port "$PORT"
+else
+  echo "[entrypoint] booting opencode TUI harness (node bridge) on 0.0.0.0:${PORT}"
+  echo "[entrypoint] base=${BASE} model=${LITELLM_DEFAULT_MODEL} repo=${REPO_DIR}"
+  exec node /app/server.js
+fi

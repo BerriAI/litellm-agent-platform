@@ -16,8 +16,8 @@ export const HARNESS_OPTIONS: HarnessOption[] = [
   {
     id: "opencode",
     label: "opencode",
-    description: "Multi-provider via LiteLLM. Default — used by every existing agent.",
-    mode: "CHAT",
+    description: "OpenCode TUI running in the sandbox. Multi-provider via LiteLLM. Opens as a live TUI in your browser via xterm.js. Set OPENCODE_MODE=serve to use the JSON API instead.",
+    mode: "TUI",
   },
   {
     id: "claude-agent-sdk",
