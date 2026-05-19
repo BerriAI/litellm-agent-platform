@@ -235,6 +235,30 @@ function buildAgentDashboardUrl(agent_id: string): string | null {
   return `${host}/agents/${encodeURIComponent(agent_id)}`;
 }
 
+/**
+ * Resolve the public LAP URL for a session page. Same env-var precedence
+ * as `buildAgentDashboardUrl`; returns null when neither var is set so
+ * the integration omits the link rather than emitting a localhost URL.
+ */
+function buildSessionUrl(session_id: string): string | null {
+  const base = process.env.LAP_BASE_URL || process.env.BASE_URL;
+  if (!base) return null;
+  const host = base.replace(/\/+$/, "");
+  return `${host}/sessions/${encodeURIComponent(session_id)}`;
+}
+
+/**
+ * Build the `externalUrls` entry for a "View session" button on outbound
+ * `response` events. Returns undefined when the public URL can't be
+ * resolved so the SessionEvent stays well-formed (the field is optional).
+ */
+function viewSessionUrls(
+  session_id: string,
+): { url: string; label: string }[] | undefined {
+  const url = buildSessionUrl(session_id);
+  return url ? [{ url, label: "View session" }] : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Internal: spawn a LAP Session via the existing v1 route.
 //
@@ -359,6 +383,7 @@ async function sendFollowupToSession(args: {
       await forwardSessionEvent(args.session_id, {
         type: "response",
         body: text,
+        externalUrls: viewSessionUrls(args.session_id),
       });
     }
   } catch (err) {
@@ -532,6 +557,7 @@ async function pollAndForwardInitialResponse(
         await forwardSessionEvent(session_id, {
           type: "response",
           body: text,
+          externalUrls: viewSessionUrls(session_id),
         }).catch(() => {
           /* best-effort */
         });

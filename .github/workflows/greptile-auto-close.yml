@@ -1,0 +1,97 @@
+name: Auto-close low Greptile score or stale PRs
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  close-low-score-prs:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Close PRs with Greptile score < 4/5 open > 24h, or any PR stale > 7d
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 << 'EOF'
+          import subprocess, json, re
+          from datetime import datetime, timezone, timedelta
+
+          def gh(cmd):
+              result = subprocess.run(
+                  ["gh"] + cmd,
+                  capture_output=True, text=True, check=True,
+                  env={**__import__("os").environ}
+              )
+              return json.loads(result.stdout)
+
+          def close_pr(pr_number, reason):
+              subprocess.run(
+                  ["gh", "pr", "close", str(pr_number), "--comment", reason],
+                  check=True
+              )
+
+          now = datetime.now(timezone.utc)
+          cutoff_24h = now - timedelta(hours=24)
+          cutoff_7d  = now - timedelta(days=7)
+
+          prs = gh(["pr", "list", "--state", "open", "--json",
+                    "number,createdAt,title,author,labels", "--limit", "100"])
+
+          for pr in prs:
+              number  = pr["number"]
+              created = datetime.fromisoformat(pr["createdAt"].replace("Z", "+00:00"))
+              labels  = [l["name"] for l in pr.get("labels", [])]
+
+              # Missing screenshot > 24h: close
+              if "needs-screenshot" in labels and created < cutoff_24h:
+                  print(f"PR #{number}: no screenshot >24h -> closing")
+                  close_pr(number,
+                      "Auto-closed: No screenshot was added within 24 hours. "
+                      "Please file a new PR and include a screenshot or screen recording showing the fix works.")
+                  continue
+
+              # Stale > 7d: close unconditionally
+              if created < cutoff_7d:
+                  print(f"PR #{number}: stale >7d -> closing")
+                  close_pr(number,
+                      "Auto-closed: PR has been open for more than 7 days without being merged. "
+                      "Please file a new PR with updated changes if still relevant.")
+                  continue
+
+              # Open < 24h: too new to evaluate
+              if created > cutoff_24h:
+                  print(f"PR #{number}: open <24h, skip")
+                  continue
+
+              # 24h–7d window: check Greptile score
+              comments = gh(["api", f"repos/$REPO/issues/{number}/comments",
+                             "--paginate"])
+
+              score = None
+              for c in comments:
+                  if "greptile" not in c.get("user", {}).get("login", "").lower():
+                      continue
+                  m = re.search(r"Confidence Score:\s*(\d+)/5", c.get("body", ""))
+                  if m:
+                      score = int(m.group(1))
+                      break
+
+              if score is None:
+                  print(f"PR #{number}: no Greptile score, skip")
+                  continue
+
+              print(f"PR #{number} '{pr['title']}': score={score}/5")
+
+              if score < 4:
+                  print(f"  -> closing (score {score} < 4)")
+                  close_pr(number,
+                      f"Auto-closed: Greptile confidence score {score}/5 (< 4/5) and PR has been open for more than 24 hours. "
+                      "Please address the review feedback and file a new PR when ready.")
+              else:
+                  print(f"  -> score ok, keep open")
+          EOF

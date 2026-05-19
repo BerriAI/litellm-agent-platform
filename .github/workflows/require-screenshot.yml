@@ -1,0 +1,61 @@
+name: Require screenshot in PR
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+
+jobs:
+  check-screenshot:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check PR body for screenshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 << 'EOF'
+          import os, subprocess, re
+
+          body = os.environ.get("PR_BODY", "") or ""
+          number = os.environ.get("PR_NUMBER")
+
+          # Screenshot present if: markdown image, or user-attached GitHub image URL
+          has_screenshot = bool(re.search(
+              r'!\[.*?\]\(.*?\)|https://.*?user-attachments.*?\.(png|jpg|jpeg|gif|webp)',
+              body, re.IGNORECASE
+          ))
+
+          def gh(cmd):
+              subprocess.run(["gh"] + cmd, check=True,
+                             env={**__import__("os").environ})
+
+          if has_screenshot:
+              print("Screenshot found — removing label if present")
+              # Remove label (ignore error if not present)
+              subprocess.run(
+                  ["gh", "pr", "edit", number, "--remove-label", "needs-screenshot"],
+                  capture_output=True
+              )
+          else:
+              print("No screenshot found — labelling PR")
+              # Create label if it doesn't exist (idempotent)
+              subprocess.run(
+                  ["gh", "label", "create", "needs-screenshot",
+                   "--color", "e11d48", "--description",
+                   "PR is missing a screenshot / proof of fix",
+                   "--force"],
+                  capture_output=True
+              )
+              gh(["pr", "edit", number, "--add-label", "needs-screenshot"])
+              gh(["pr", "comment", number, "--body",
+                  "**Missing screenshot.** Please add a screenshot or screen recording "
+                  "showing the fix works. PRs without a screenshot will be auto-closed "
+                  "after 24 hours.\n\n"
+                  "To add one: edit the PR description and drag-and-drop an image, "
+                  "or paste a link to a recording. Then file a new PR if this one is closed."])
+          EOF

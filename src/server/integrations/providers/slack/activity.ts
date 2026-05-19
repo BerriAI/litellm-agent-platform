@@ -61,16 +61,41 @@ function decodeKey(external_session_id: string): DecodedKey | null {
 }
 
 /**
- * Render `externalUrls` as Slack mrkdwn link suffixes. Slack uses
- * `<url|label>` rather than `[label](url)`, so build it explicitly here
- * instead of leaning on a markdown renderer. Returns an empty string when
- * the list is missing/empty so callers can append unconditionally.
+ * Pull `externalUrls` off the SessionEvent variants that carry them
+ * (`thought`, `response`). Returns undefined for variants without the
+ * field so the caller can branch on truthiness.
  */
-function formatLinks(
-  urls: { url: string; label: string }[] | undefined,
-): string {
-  if (!urls || urls.length === 0) return "";
-  return " " + urls.map((u) => `<${u.url}|${u.label}>`).join(" · ");
+function externalUrlsFor(
+  event: SessionEvent,
+): { url: string; label: string }[] | undefined {
+  if (event.type === "thought" || event.type === "response") {
+    return event.externalUrls;
+  }
+  return undefined;
+}
+
+/**
+ * Build a Block Kit `actions` block with a button per URL. We use buttons
+ * instead of appending mrkdwn `<url|label>` suffixes so the link reads as a
+ * tappable element in the Slack client (matches the UX of integrations
+ * like Inspect / Linear's agent activity cards).
+ */
+function buttonBlock(urls: { url: string; label: string }[]): {
+  type: "actions";
+  elements: Array<{
+    type: "button";
+    text: { type: "plain_text"; text: string };
+    url: string;
+  }>;
+} {
+  return {
+    type: "actions",
+    elements: urls.map((u) => ({
+      type: "button",
+      text: { type: "plain_text", text: u.label },
+      url: u.url,
+    })),
+  };
 }
 
 function bodyFor(event: SessionEvent): string | null {
@@ -174,8 +199,18 @@ export async function postActivity(
 
   const payload: Record<string, unknown> = {
     channel: decoded.channel,
+    // Keep `text` set even when we send `blocks` — Slack uses it for
+    // notifications, accessibility, and the fallback rendering in clients
+    // that don't support Block Kit.
     text: body,
   };
+  const urls = externalUrlsFor(ctx.event);
+  if (urls && urls.length > 0) {
+    payload.blocks = [
+      { type: "section", text: { type: "mrkdwn", text: body } },
+      buttonBlock(urls),
+    ];
+  }
   if (decoded.thread_ts) {
     payload.thread_ts = decoded.thread_ts;
   }

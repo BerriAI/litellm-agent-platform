@@ -13,6 +13,7 @@ import { ZodError } from "zod";
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { buildSessionOrigin } from "@/server/integrations/core/origin";
 import { stopTask } from "@/server/k8s";
 import { invalidateSession } from "@/server/sessionCache";
 import { HttpError, httpError, toApiSession } from "@/server/types";
@@ -28,9 +29,29 @@ export async function GET(req: Request, ctx: RouteContext) {
   try {
     assertAuth(req);
     const { session_id } = await ctx.params;
-    const row = await prisma.session.findUnique({ where: { session_id } });
+    // Pull integration_session + the binding's install in the same round-trip
+    // so the UI can render an "originated from Slack/Linear" banner without a
+    // follow-up request. The relation is optional — UI-originated sessions
+    // have integration_session=null and the API returns origin=null.
+    const row = await prisma.session.findUnique({
+      where: { session_id },
+      include: {
+        integration_session: {
+          include: { binding: { include: { install: true } } },
+        },
+      },
+    });
     if (!row) httpError(404, `session ${session_id} not found`);
-    return Response.json(toApiSession(row));
+    const ext = row.integration_session;
+    const origin = ext
+      ? buildSessionOrigin({
+          integration_id: ext.binding.install.integration_id,
+          external_session_id: ext.external_session_id,
+          external_ref: ext.external_ref ?? null,
+          install: ext.binding.install,
+        })
+      : null;
+    return Response.json(toApiSession(row, null, origin));
   } catch (e) {
     if (e instanceof Response) return e;
     if (e instanceof HttpError)

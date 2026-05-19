@@ -15,6 +15,7 @@
 import type { Agent, Memory, Session, WarmTask } from "@prisma/client";
 import { z } from "zod";
 import { decrypt, encrypt } from "@/server/integrations/core/crypto";
+import type { SessionOrigin } from "@/server/integrations/core/origin";
 import { parseAttachedSkillIds } from "@/server/skill-prompt";
 
 // ============================================================================
@@ -460,6 +461,11 @@ export interface ApiSession {
   // Optional human-readable detail for the current phase. Rendered as a
   // small subtitle under the active step in the spawn-progress card.
   phase_detail: string | null;
+  // Present when the session was created by an integration webhook
+  // (Slack DM/@-mention, Linear assign, etc.) rather than the LAP UI.
+  // The session view renders a banner at the top with a deep link back
+  // to the originating thread. Null for UI-originated sessions.
+  origin: SessionOrigin | null;
 }
 
 // Admin / observability — wire shape returned by GET /api/v1/admin/stats.
@@ -835,6 +841,7 @@ export function toApiMemory(row: MemoryRow): ApiMemory {
 export function toApiSession(
   row: SessionRow,
   response: HarnessMessageResponse | null = null,
+  origin: SessionOrigin | null = null,
 ): ApiSession {
   // tty_token comes from the shared HARNESS_AUTH_TOKEN env var the platform
   // also propagates into sandbox pods (via CONTAINER_ENV_HARNESS_AUTH_TOKEN
@@ -880,6 +887,7 @@ export function toApiSession(
     failure_reason: row.failure_reason ?? null,
     phase: row.phase ?? null,
     phase_detail: row.phase_detail ?? null,
+    origin,
   };
 }
 

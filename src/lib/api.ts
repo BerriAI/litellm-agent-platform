@@ -222,6 +222,26 @@ export interface SessionRow {
   // Optional human-readable detail for the current phase. Rendered as a
   // small subtitle under the active step.
   phase_detail?: string | null;
+  // Set when the session was kicked off by an integration webhook
+  // (Slack DM/@-mention, Linear assign, …) rather than the LAP UI. The
+  // session view renders a small banner with a deep link back to the
+  // originating thread. Null for sessions created from the UI.
+  origin?: SessionOrigin | null;
+}
+
+/**
+ * Wire-side description of which integration created this session and how
+ * to link back. Mirrors `SessionOrigin` in
+ * `src/server/integrations/core/origin.ts`. Today only Slack supplies a
+ * `url`; other integrations may leave it null until their deep-link
+ * helper is wired in.
+ */
+export interface SessionOrigin {
+  integration_id: string;
+  external_session_id: string;
+  external_ref: string | null;
+  workspace_name: string;
+  url: string | null;
 }
 
 /**

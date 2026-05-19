@@ -18,28 +18,6 @@ Every sandbox pod runs a vault sidecar that MITMs all HTTPS egress via `HTTPS_PR
 - After merging `containerEnvPassthrough` into the harness env, **explicitly `delete merged["KEY"]`** for any key that must be vault-stubbed. `CONTAINER_ENV_<KEY>` server vars flow through passthrough and will silently reintroduce the real value if you only omit the key from `base`.
 - Setting `HTTP_PROXY` or `HTTPS_PROXY` to point at vault requires the corresponding handler in `vault/src/server.ts`. Adding a proxy env var without a server handler returns 404 to the client — not a block, not a swap, just a broken proxy.
 
-# HARNESS_AUTH_TOKEN — TTY authentication
-
-Shared secret that gates `/tty` WebSocket connections and `/session*` API calls. Without it the harness **fails closed** — all connections return 401.
-
-| Where | Var | Purpose |
-|---|---|---|
-| `litellm-env` k8s secret | `HARNESS_AUTH_TOKEN` | Set once; injected into every sandbox pod at creation time |
-| Platform web/worker pod env | `HARNESS_AUTH_TOKEN` | Read by `toApiSession` to return `tty_token` to CLI/browser |
-
-**Flow:** `buildContainerEnv` in `src/server/k8s.ts` reads `HARNESS_AUTH_TOKEN` from the platform env and injects it into every new sandbox pod. The CLI reads `session.tty_token` from the session API response and appends it as `?token=` on the WebSocket URL (AWS ALB strips `Authorization` headers on WS upgrades).
-
-**Bootstrap (one-time, per cluster):**
-```bash
-token=$(openssl rand -hex 32)
-kubectl patch secret litellm-env -n default --type=json -p="[
-  {\"op\":\"add\",\"path\":\"/data/HARNESS_AUTH_TOKEN\",\"value\":\"$(printf '%s' "$token" | base64 | tr -d '\n')\"}
-]"
-kubectl rollout restart deployment/litellm-web deployment/litellm-worker
-```
-
-This bootstrap is a one-time manual step per cluster. The deploy pipeline does not auto-seed this secret.
-
 # Harness images
 
 Each harness type has its own container image configured via env vars. Set these in the `litellm-env` k8s secret (or `.env` for local dev):
