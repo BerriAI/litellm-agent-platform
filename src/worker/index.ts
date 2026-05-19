@@ -18,6 +18,7 @@
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { reconcileOrphans } from "@/server/reconcile";
+import { tickCron } from "@/server/cron";
 import { topUpWarmPool } from "@/server/warmPool";
 
 const intervalMs = env.RECONCILE_INTERVAL_SECONDS * 1000;
@@ -27,6 +28,7 @@ async function tick() {
   let k8s_ok = true;
   let r = { inspected: 0, stopped: 0, failed_creating: 0, idle_killed: 0, warm_orphans_stopped: 0, ghost_killed: 0, warm_stale_killed: 0 };
   let t = { provisioned: 0, recycled: 0, fallback_dead: 0 };
+  let c = { considered: 0, fired: 0, skipped_overlap: 0, errors: 0 };
 
   try {
     r = await reconcileOrphans();
@@ -46,6 +48,16 @@ async function tick() {
     }
   }
 
+  // Cron tick — fire scheduled agents whose cron_next_fire_at has passed.
+  // Multi-pod safe via SELECT … FOR UPDATE SKIP LOCKED inside tickCron;
+  // when no agents have a schedule set this query short-circuits via the
+  // (cron_enabled, cron_next_fire_at) index and costs ~one index seek.
+  try {
+    c = await tickCron();
+  } catch (e) {
+    console.error("cron tick failed:", e);
+  }
+
   // Heartbeat — emitted every tick so operators can confirm the worker is
   // alive and K8s is reachable without waiting for a non-zero event.
   console.log(
@@ -53,7 +65,9 @@ async function tick() {
     ` inspected=${r.inspected} stopped=${r.stopped}` +
     ` failed_creating=${r.failed_creating} idle_killed=${r.idle_killed}` +
     ` ghost_killed=${r.ghost_killed} warm_stale_killed=${r.warm_stale_killed}` +
-    ` warm_provisioned=${t.provisioned} warm_recycled=${t.recycled}`,
+    ` warm_provisioned=${t.provisioned} warm_recycled=${t.recycled}` +
+    ` cron_considered=${c.considered} cron_fired=${c.fired}` +
+    ` cron_skipped_overlap=${c.skipped_overlap} cron_errors=${c.errors}`,
   );
 }
 
