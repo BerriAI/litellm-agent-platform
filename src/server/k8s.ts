@@ -468,9 +468,15 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
   // explicitly below as the platform key, so including it from agent.env_vars
   // would produce two REAL_LITELLM_API_KEY entries with non-deterministic
   // winner behaviour in the vault container spec.
-  const out: Array<{ name: string; value: string }> = Object.entries(raw)
-    .filter(([k]) => k !== "LITELLM_API_KEY")
-    .map(([k, v]) => ({ name: `REAL_${k}`, value: decrypt(v) }));
+  const out: Array<{ name: string; value: string }> = [];
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === "LITELLM_API_KEY") continue;
+    try {
+      out.push({ name: `REAL_${k}`, value: decrypt(v) });
+    } catch (e) {
+      console.warn(`buildVaultEnv: skipping env var ${k} — decrypt failed (missing ENCRYPTION_KEY?): ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   // MASTER_KEY is the shared secret both sides hash to derive the
   // /interceptions auth token. Without it the platform's queries 401.
   out.push({ name: "MASTER_KEY", value: env.MASTER_KEY });

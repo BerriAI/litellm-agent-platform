@@ -157,7 +157,7 @@ export function Sidebar() {
     return m;
   }, [sessions]);
 
-  // Top 5 agents with most recent session activity.
+  // Top 5 agents sorted by most recent session activity, then creation time.
   const sortedAgents = useMemo(() => {
     const lastActiveMs = (a: AgentRow): number => {
       const agentSessions = sessionsByAgent.get(a.id) ?? [];
@@ -167,8 +167,13 @@ export function Sidebar() {
       return times.length > 0 ? Math.max(...times) : 0;
     };
     return [...agents]
-      .filter((a) => (sessionsByAgent.get(a.id) ?? []).length > 0)
-      .sort((a, b) => lastActiveMs(b) - lastActiveMs(a))
+      .sort((a, b) => {
+        const byActivity = lastActiveMs(b) - lastActiveMs(a);
+        if (byActivity !== 0) return byActivity;
+        const at = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bt = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bt - at;
+      })
       .slice(0, 5);
   }, [agents, sessionsByAgent]);
 

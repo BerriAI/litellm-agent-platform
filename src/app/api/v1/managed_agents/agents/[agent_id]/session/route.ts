@@ -29,6 +29,7 @@
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { env } from "@/server/env";
 import {
   runTask,
   waitHttpReady,
@@ -221,6 +222,23 @@ async function coldBringUp(
 ): Promise<BringUpResult> {
   const spawnStart = Date.now();
   try {
+    const rawSandboxFiles = (agent as Record<string, unknown>).sandbox_files;
+    const sandboxFiles = Array.isArray(rawSandboxFiles)
+      ? (rawSandboxFiles as import("@/server/types").SandboxFileSpec[])
+      : [];
+
+    // Local dev bypass: skip K8s entirely and use the local harness directly.
+    if (env.LOCAL_SANDBOX_URL) {
+      console.log(`[local-dev] bypassing K8s, using LOCAL_SANDBOX_URL=${env.LOCAL_SANDBOX_URL}`);
+      await setPhase(session_id, "waiting_harness");
+      await waitHttpReady(env.LOCAL_SANDBOX_URL);
+      await setPhase(session_id, "harness_ready");
+      const result = await finishBringUp(agent, session_id, body, env.LOCAL_SANDBOX_URL, sandboxFiles);
+      registry.observe("session_spawn_duration_seconds", { path: "cold" }, (Date.now() - spawnStart) / 1000);
+      registry.inc("session_spawn_total", { path: "cold", result: "success" });
+      return result;
+    }
+
     let t = Date.now();
     await setPhase(session_id, "creating_sandbox");
     const { task_arn } = await runTask({ agent, session_id, env_vars: body.env_vars });
@@ -234,10 +252,6 @@ async function coldBringUp(
     registry.observe("session_phase_duration_seconds", { phase: "pod_pending" }, (Date.now() - t) / 1000);
 
     await setPhase(session_id, "pod_running");
-    const rawSandboxFiles = (agent as Record<string, unknown>).sandbox_files;
-    const sandboxFiles = Array.isArray(rawSandboxFiles)
-      ? (rawSandboxFiles as import("@/server/types").SandboxFileSpec[])
-      : [];
 
     t = Date.now();
     await setPhase(session_id, "waiting_harness");

@@ -161,9 +161,11 @@ export default function LandingPage() {
               />
             </div>
 
-            {open && filtered.length > 0 && (
+            {open && (filtered.length > 0 || query) && (
               <div className="absolute left-0 top-full z-50 mt-1 max-h-56 w-64 overflow-y-auto rounded-md border border-border bg-background shadow-md">
-                {filtered.map((a) => (
+                {filtered.length === 0 ? (
+                  <p className="px-3 py-2 text-[12px] text-muted-foreground">No agents match "{query}"</p>
+                ) : filtered.map((a) => (
                   <button
                     key={a.id}
                     type="button"
