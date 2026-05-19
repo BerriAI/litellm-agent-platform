@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { ChannelsSection } from "@/components/channels-section";
+import { CronEditor } from "@/components/cron-editor";
 import { ModelPicker } from "@/components/model-picker";
 import { PfpUpload } from "@/components/pfp-upload";
 import { CallAgentSnippets } from "@/components/call-agent-snippets";
@@ -173,6 +174,26 @@ export default function AgentDetailPage({ params }: PageProps) {
       if (!agent) return;
       setError(null);
       const updated = await updateAgent(agent.id, { env_vars: next });
+      setAgent(updated);
+    },
+    [agent],
+  );
+
+  const handleCronSave = useCallback(
+    async (next: {
+      cron_schedule: string;
+      cron_timezone: string;
+      cron_enabled: boolean;
+    }) => {
+      if (!agent) return;
+      setError(null);
+      // Empty string clears the schedule server-side; we don't need to map
+      // it to null on the client (the route handles both).
+      const updated = await updateAgent(agent.id, {
+        cron_schedule: next.cron_schedule,
+        cron_timezone: next.cron_timezone,
+        cron_enabled: next.cron_enabled,
+      });
       setAgent(updated);
     },
     [agent],
@@ -450,6 +471,19 @@ export default function AgentDetailPage({ params }: PageProps) {
                 />
               </dd>
 
+              <dt className="text-muted-foreground">Schedule</dt>
+              <dd className="min-w-0">
+                <CronEditor
+                  cron_schedule={agent.cron_schedule ?? null}
+                  cron_timezone={agent.cron_timezone ?? "UTC"}
+                  cron_enabled={agent.cron_enabled ?? true}
+                  cron_last_fired_at={agent.cron_last_fired_at ?? null}
+                  cron_next_fire_at={agent.cron_next_fire_at ?? null}
+                  onSave={handleCronSave}
+                  onError={(msg) => setError(msg)}
+                />
+              </dd>
+
               {agent.prompt?.trim() ? (() => {
                 const systemPrompt = agent.prompt
                   .split(/\n<!-- skill(?::[^\s>]+)? -->\n/)[0]
@@ -532,6 +566,11 @@ export default function AgentDetailPage({ params }: PageProps) {
                     <Badge variant={statusVariant(session.status)} className="shrink-0">
                       {session.status}
                     </Badge>
+                    {session.trigger === "cron" ? (
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        cron
+                      </Badge>
+                    ) : null}
                     <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground">
                       {session.id}
                     </span>
