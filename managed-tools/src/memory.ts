@@ -35,12 +35,43 @@ export interface MemoryEnv {
   auth_token: string;
 }
 
-export function memoryEnv(): MemoryEnv | null {
+export interface MemoryEnvStatus {
+  env: MemoryEnv | null;
+  missing: string[];
+}
+
+// Resolve the memory tool env without logging — exposes the missing-var list
+// so callers (memoryEnv, /api/health/memory) can decide how to surface it.
+export function memoryEnvStatus(): MemoryEnvStatus {
   const base_url = (process.env.LAP_BASE_URL ?? "").replace(/\/+$/, "");
   const agent_id = process.env.AGENT_ID ?? "";
   const auth_token = process.env.LAP_AUTH_TOKEN ?? "";
-  if (!base_url || !agent_id || !auth_token) return null;
-  return { base_url, agent_id, auth_token };
+  const missing: string[] = [];
+  if (!base_url) missing.push("LAP_BASE_URL");
+  if (!agent_id) missing.push("AGENT_ID");
+  if (!auth_token) missing.push("LAP_AUTH_TOKEN");
+  if (missing.length > 0) return { env: null, missing };
+  return { env: { base_url, agent_id, auth_token }, missing: [] };
+}
+
+// Warn-once guard so repeated harness calls don't spam logs. Set per-process;
+// the warning fires once per boot when the env is incomplete.
+let memoryEnvWarnedOnce = false;
+
+export function memoryEnv(): MemoryEnv | null {
+  const status = memoryEnvStatus();
+  if (status.env) return status.env;
+  if (!memoryEnvWarnedOnce) {
+    memoryEnvWarnedOnce = true;
+    // Loud because the previous behavior was silent — a missing LAP_BASE_URL
+    // in prod made memory tools invisible to every agent with no log signal.
+    console.warn(
+      `[memory] disabled — missing env: ${status.missing.join(", ")}. ` +
+        `save_memory/search_memory will NOT be registered. ` +
+        `Fix: set the listed vars on the harness pod's container env.`,
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
