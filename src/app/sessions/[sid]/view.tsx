@@ -1228,7 +1228,13 @@ function MainPanel({
             liveTurns.length > 0 &&
             (messages.length === 0 ||
               messages[messages.length - 1].role === "user" ||
-              isSdkRestored) &&
+              // isSdkRestored: cached SDK frames restored from sessionStorage after
+              // navigation return. Only surface them when the harness thread does NOT
+              // already have a completed assistant turn for this session — otherwise
+              // the last assistant response renders twice (once from messages, once
+              // from liveTurns).
+              (isSdkRestored &&
+                messages[messages.length - 1]?.role !== "assistant")) &&
             liveTurns.map((m) => (
               <MessageBlock key={m.id} msg={m} isFirstUser={false} />
             ))}
