@@ -546,23 +546,25 @@ function extractReplText(data) {
 // Animated spinner shown while the agent turn is in-flight.
 // Returns a stop() function that clears the line and returns elapsed seconds.
 function startSpinner() {
-  const verbs  = ["Thinking","Running","Churning","Working","Percolating"];
-  const start  = Date.now();
+  const verbs = ["Thinking","Running","Churning","Working","Percolating"];
+  const start = Date.now();
   let dots = 0;
+  // Write a blank line that the spinner will own — readline already moved to a
+  // new line after Enter, so we take the next line and hold it.
+  process.stdout.write("\n");
   const timer = setInterval(() => {
     const elapsed = Math.floor((Date.now() - start) / 1000);
     const verb    = verbs[Math.floor(elapsed / 4) % verbs.length];
     const trail   = ".".repeat((dots % 3) + 1).padEnd(3, " ");
-    readline.clearLine(process.stdout, 0);
-    readline.cursorTo(process.stdout, 0);
-    process.stdout.write(`  ${ansi.bold("*")} ${verb}${trail} ${ansi.dim(`(${elapsed}s)`)}`);
+    // \x1b[1A = up 1 line  \x1b[2K = erase entire line  \r = col 0
+    process.stdout.write(`\x1b[1A\x1b[2K\r  * ${verb}${trail}(${elapsed}s)\n`);
     dots++;
   }, 300);
   return {
     stop() {
       clearInterval(timer);
-      readline.clearLine(process.stdout, 0);
-      readline.cursorTo(process.stdout, 0);
+      // Erase the spinner line and leave cursor at col 0 on that line
+      process.stdout.write(`\x1b[1A\x1b[2K\r`);
       return Math.round((Date.now() - start) / 1000);
     },
   };
