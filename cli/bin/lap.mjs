@@ -548,7 +548,6 @@ function extractReplText(data) {
 function startSpinner() {
   const frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
   const verbs  = ["Thinking","Running","Churning","Working","Percolating"];
-  const orange = s => `\x1b[38;5;208m${s}\x1b[0m`;
   const start  = Date.now();
   let fi = 0;
   const timer = setInterval(() => {
@@ -557,7 +556,7 @@ function startSpinner() {
     readline.clearLine(process.stdout, 0);
     readline.cursorTo(process.stdout, 0);
     process.stdout.write(
-      `  ${orange(frames[fi % frames.length])} ${orange(verb + "…")} ${ansi.dim(`(${elapsed}s)`)}`
+      `  ${ansi.yellow(frames[fi % frames.length])} ${ansi.yellow(verb + "…")} ${ansi.dim(`(${elapsed}s)`)}`
     );
     fi++;
   }, 80);
