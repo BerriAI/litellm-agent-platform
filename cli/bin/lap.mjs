@@ -546,20 +546,18 @@ function extractReplText(data) {
 // Animated spinner shown while the agent turn is in-flight.
 // Returns a stop() function that clears the line and returns elapsed seconds.
 function startSpinner() {
-  const frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
   const verbs  = ["Thinking","Running","Churning","Working","Percolating"];
   const start  = Date.now();
-  let fi = 0;
+  let dots = 0;
   const timer = setInterval(() => {
     const elapsed = Math.floor((Date.now() - start) / 1000);
     const verb    = verbs[Math.floor(elapsed / 4) % verbs.length];
+    const trail   = ".".repeat((dots % 3) + 1).padEnd(3, " ");
     readline.clearLine(process.stdout, 0);
     readline.cursorTo(process.stdout, 0);
-    process.stdout.write(
-      `  ${ansi.yellow(frames[fi % frames.length])} ${ansi.yellow(verb + "…")} ${ansi.dim(`(${elapsed}s)`)}`
-    );
-    fi++;
-  }, 80);
+    process.stdout.write(`  ${ansi.bold("*")} ${verb}${trail} ${ansi.dim(`(${elapsed}s)`)}`);
+    dots++;
+  }, 300);
   return {
     stop() {
       clearInterval(timer);
