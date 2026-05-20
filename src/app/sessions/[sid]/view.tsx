@@ -329,10 +329,12 @@ export default function SessionThreadView() {
   // turn that arrives while the page is open — we never re-pull the whole
   // session to render it.
   const sdkStreamEnabled = !!sessionId && session?.status === "ready";
-  const { messages: sdkMessages, isRestored: isSdkRestored } = useSdkMessageStream(
-    sessionId,
-    sdkStreamEnabled,
-  );
+  const {
+    messages: sdkMessages,
+    status: sdkStatus,
+    isRestored: isSdkRestored,
+    liveFrameCount,
+  } = useSdkMessageStream(sessionId, sdkStreamEnabled);
 
   // The live turns, rendered directly from the SDK stream and appended to the
   // thread as frames arrive. `foldSdkMessages` collapses partial stream_event
@@ -499,6 +501,40 @@ export default function SessionThreadView() {
       window.clearInterval(id);
     };
   }, [sessionId]);
+
+  // Bracket externally-triggered turns (Slack @mention, Linear assign) that
+  // stream in while this tab is open. The SDK stream gives us the assistant
+  // reply (rendered live via `liveTurns`) but NOT the prompt that started the
+  // turn — that only lives in the durable harness thread. Without pulling it,
+  // the durable thread still ends in the *previous* turn's assistant message,
+  // the `liveTurns` render gate (last row must be a user message) stays shut,
+  // and nothing paints until the user navigates (which re-runs refreshThread).
+  //
+  // We only touch the durable thread at the turn boundaries — once to fetch
+  // the prompt when frames start, once to finalize when the turn goes idle.
+  // The streaming assistant itself still renders from `liveTurns`; we never
+  // re-pull the whole session to render the in-flight tokens.
+  const promptSyncedRef = useRef<boolean>(false);
+
+  // Turn start: pull the prompt into the durable thread the first time a live
+  // turn produces frames. Skipped while a local send is in flight — that path
+  // owns its own refresh and already has an optimistic prompt row.
+  useEffect(() => {
+    if (liveFrameCount === 0) return;
+    if (promptSyncedRef.current) return;
+    if (hasInProgress) return;
+    promptSyncedRef.current = true;
+    void refreshThread();
+  }, [liveFrameCount, hasInProgress, refreshThread]);
+
+  // Turn end: when the agent loop settles, pull the now-committed assistant
+  // turn so it persists in the durable thread (and survives navigation), then
+  // re-arm prompt-sync for the next turn.
+  useEffect(() => {
+    if (sdkStatus !== "completed") return;
+    promptSyncedRef.current = false;
+    void refreshThread();
+  }, [sdkStatus, refreshThread]);
 
   // First load on a session URL: jump straight to the latest turn so the
   // user lands at the live end of the conversation (matches Slack, iMessage,

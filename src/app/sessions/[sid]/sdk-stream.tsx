@@ -105,10 +105,21 @@ function saveSdkCache(sessionId: string, msgs: SDKMessage[]): void {
 export function useSdkMessageStream(
   sessionId: string,
   enabled: boolean,
-): { messages: SDKMessage[]; status: SdkStreamStatus; isRestored: boolean } {
+): {
+  messages: SDKMessage[];
+  status: SdkStreamStatus;
+  isRestored: boolean;
+  liveFrameCount: number;
+} {
   const [messages, setMessages] = useState<SDKMessage[]>(() =>
     sessionId ? loadSdkCache(sessionId) : [],
   );
+  // Count of `claude_sdk_message` frames received from the *live* EventSource
+  // since this mount. Cache restore does NOT bump it. The session view watches
+  // this to detect that a turn started streaming while the tab was open (e.g. a
+  // Slack/webhook turn) — the trigger to pull that turn's prompt into the
+  // durable thread so the live assistant renders under it.
+  const [liveFrameCount, setLiveFrameCount] = useState<number>(0);
   // isRestored: true while showing cached data with no fresh live event yet.
   // Cleared on the first real claude_sdk_message from the EventSource so
   // the view stops treating the cache as authoritative once the stream is live.
@@ -169,6 +180,11 @@ export function useSdkMessageStream(
           // the primary source.
           setIsRestored(false);
           setMessages((prev) => [...prev, sdk]);
+          setLiveFrameCount((n) => n + 1);
+          // Re-enter "streaming" so a new turn after a prior session.idle is
+          // observable as a fresh turn (the "live" badge returns, and the
+          // session view re-arms its per-turn prompt sync).
+          setStatus("streaming");
           return;
         }
         if (TERMINAL_TYPES.has(parsed.type)) {
@@ -201,7 +217,7 @@ export function useSdkMessageStream(
     };
   }, [sessionId, enabled]);
 
-  return { messages, status, isRestored };
+  return { messages, status, isRestored, liveFrameCount };
 }
 
 let _uiCookiePromise: Promise<boolean> | null = null;
