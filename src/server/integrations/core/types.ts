@@ -164,6 +164,32 @@ export interface IntegrationAttachment {
 }
 
 /**
+ * Identity of the human who authored an inbound message.
+ *
+ * Propagated from the webhook adapter all the way through to the agent's
+ * prompt, so the agent can address the user back ("hi @ishaan_jaff …") or
+ * @-mention them in the originating medium. Without this, the harness only
+ * sees the message text — it has no idea who sent it, even on platforms
+ * (Slack, Discord, …) where the medium hands us a user id for free.
+ *
+ * Always-available: `provider` + `id`. The `handle` / `display_name` are
+ * best-effort — providers that can't resolve them (missing scope, API
+ * error, OpenAI-style anonymous senders) omit them and the agent still
+ * gets the raw id, which is enough to @-mention back on platforms that
+ * support id-mentions (Slack: `<@U123ABC>`).
+ */
+export interface IntegrationSender {
+  /** Stable provider id, mirrors `Integration.id` ("slack", "linear", …). */
+  provider: string;
+  /** Provider-specific user id (e.g. Slack user id "U123ABC"). */
+  id: string;
+  /** Provider-specific handle / username without sigil. Optional. */
+  handle?: string;
+  /** Human display name ("Ishaan Jaffer"). Optional. */
+  display_name?: string;
+}
+
+/**
  * Inbound event — what an integration translates a raw webhook payload into.
  * The dispatcher acts on the kind tag.
  */
@@ -176,12 +202,16 @@ export type IntegrationEvent =
       external_ref?: string;
       /** Image / file uploads attached to the inbound message. */
       attachments?: IntegrationAttachment[];
+      /** Author of the message in the originating medium. Forwarded into
+       *  the harness prompt so the agent knows who it's talking to. */
+      sender?: IntegrationSender;
     }
   | {
       kind: "followup";
       external_session_id: string;
       body: string;
       attachments?: IntegrationAttachment[];
+      sender?: IntegrationSender;
     }
   | { kind: "cancel"; external_session_id: string }
   /**
@@ -206,6 +236,7 @@ export type IntegrationEvent =
        *  thread root. Optional — providers that don't have a per-message id
        *  can leave it unset and the dispatcher falls back to `external_session_id`. */
       original_ts?: string;
+      sender?: IntegrationSender;
       /** Prior messages in the thread, oldest→newest, rendered as a transcript.
        *  Set by mediums that backfill thread context when the bot is added to an
        *  existing conversation (e.g. Slack `conversations.replies`). The

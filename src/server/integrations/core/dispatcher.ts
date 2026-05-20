@@ -36,6 +36,7 @@ import type {
   Integration,
   IntegrationAttachment,
   IntegrationEvent,
+  IntegrationSender,
   SessionEvent,
 } from "./types";
 
@@ -137,6 +138,7 @@ export async function handleInbound(
       agent_id: binding.agent.agent_id,
       prompt: event.prompt,
       attachments: event.attachments,
+      sender: event.sender,
     });
 
     return new Response(null, { status: 202 });
@@ -148,7 +150,11 @@ export async function handleInbound(
     });
     if (!ext) return errorResponse(404, "no session for that external id");
 
-    void sendFollowupToSession({ session_id: ext.session_id, body: event.body });
+    void sendFollowupToSession({
+      session_id: ext.session_id,
+      body: event.body,
+      sender: event.sender,
+    });
     return new Response(null, { status: 202 });
   }
 
@@ -268,6 +274,9 @@ interface SpawnInput {
   prompt: string;
   /** Image / file uploads to forward to the harness as multimodal parts. */
   attachments?: IntegrationAttachment[];
+  /** Author of the message — propagated to the session-create route so the
+   *  harness prompt is prefixed with the sender's identity. */
+  sender?: IntegrationSender;
 }
 
 /**
@@ -297,6 +306,7 @@ async function spawnSessionForEvent(
         initial_prompt: input.prompt,
         title: input.external_ref ?? "integration task",
         initial_attachments: input.attachments,
+        sender: input.sender,
       }),
     });
     if (!res.ok) {
@@ -356,6 +366,9 @@ async function sendFollowupToSession(args: {
    * same shape as `runInitialPrompt`.
    */
   attachments?: IntegrationAttachment[];
+  /** Author of the follow-up message — prepended to the harness `text`
+   *  by the message route so the agent sees who's talking on every turn. */
+  sender?: IntegrationSender;
 }): Promise<void> {
   const baseUrl = process.env.BASE_URL ?? "http://localhost:3000";
   const url = `${baseUrl}/api/v1/managed_agents/sessions/${encodeURIComponent(
@@ -373,6 +386,7 @@ async function sendFollowupToSession(args: {
         ...(args.attachments && args.attachments.length > 0
           ? { attachments: args.attachments }
           : {}),
+        ...(args.sender ? { sender: args.sender } : {}),
       }),
     });
     if (!res.ok) {
@@ -449,6 +463,7 @@ async function handleMessage(input: {
       session_id: existing.session_id,
       body: event.prompt,
       attachments: event.attachments,
+      sender: event.sender,
     });
     return new Response(null, { status: 202 });
   }
@@ -501,6 +516,7 @@ async function handleMessage(input: {
       agent_id: binding.agent.agent_id,
       prompt: initialPrompt,
       attachments: event.attachments,
+      sender: event.sender,
     });
     if (!spawned) return;
     await integration

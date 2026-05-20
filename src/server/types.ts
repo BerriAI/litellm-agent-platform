@@ -16,6 +16,7 @@ import type { Agent, Memory, Session, WarmTask } from "@prisma/client";
 import { z } from "zod";
 import { decrypt, encrypt } from "@/server/integrations/core/crypto";
 import type { SessionOrigin } from "@/server/integrations/core/origin";
+import { SenderBody } from "@/server/integrations/core/sender";
 import { parseAttachedSkillIds } from "@/server/skill-prompt";
 
 // ============================================================================
@@ -289,6 +290,17 @@ export const CreateSessionBody = z.object({
     .max(INITIAL_ATTACHMENTS_MAX_COUNT)
     .optional(),
   /**
+   * Identity of the human who sent the message in the originating medium.
+   * Populated by the integrations dispatcher (Slack today) so the agent can
+   * @-mention the user back. The route prepends a one-line `[from: …]`
+   * header to `initial_prompt` before sending it to the harness; see
+   * `src/server/integrations/core/sender.ts`.
+   *
+   * Optional — direct API / UI callers don't set this and the prompt
+   * passes through unchanged.
+   */
+  sender: SenderBody.optional(),
+  /**
    * Per-session env vars forwarded into the harness shell at Sandbox CR
    * create time. Use for short-lived secrets like `GITHUB_TOKEN` or
    * `CIRCLECI_TOKEN`. Never persisted to the database, never logged by value.
@@ -331,6 +343,17 @@ export const SendMessageBody = z.object({
     .array(InitialAttachment)
     .max(INITIAL_ATTACHMENTS_MAX_COUNT)
     .optional(),
+  /**
+   * Same `IntegrationSender` shape forwarded by the dispatcher on follow-up
+   * messages — see `CreateSessionBody.sender`. The route prepends a
+   * `[from: …]` header to `text` so every turn carries the author identity
+   * (Slack threads can have multiple participants, and the agent shouldn't
+   * have to guess who's writing now).
+   *
+   * Ignored when only `parts` is set (UI callers explicitly building
+   * harness parts opt out of header injection).
+   */
+  sender: SenderBody.optional(),
 });
 export type SendMessageBody = z.infer<typeof SendMessageBody>;
 export type MessageAttachment = z.infer<typeof InitialAttachment>;

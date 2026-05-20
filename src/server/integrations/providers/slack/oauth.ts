@@ -31,11 +31,14 @@ const SCOPES = [
   "app_mentions:read", // receive app_mention events
   "channels:history", // read thread history in public channels (conversations.replies)
   "chat:write", // post replies via chat.postMessage
+  "files:read", // download user-uploaded images (see ./files.ts)
   "groups:history", // read thread history in private channels
   "im:history", // read DM messages directed at the bot
   "im:read", // know which channels are DMs
   "im:write", // open DM conversations (not strictly required for v1, kept for parity)
   "mpim:history", // read thread history in group DMs
+  "reactions:write", // immediate :eyes: ack on inbound messages
+  "users:read", // resolve sender id → handle/display name (see ./users.ts)
 ];
 
 interface SlackOAuthV2Response {

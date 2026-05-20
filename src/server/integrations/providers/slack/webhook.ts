@@ -33,9 +33,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IntegrationInstall } from "@prisma/client";
 import type {
   IntegrationEvent,
+  IntegrationSender,
   WebhookAdapter,
 } from "../../core/types";
 import { fetchAttachments, type SlackFile } from "./files";
+import { resolveSlackUser } from "./users";
 import { fetchThreadHistory } from "./thread";
 
 const SIG_HEADER = "x-slack-signature";
@@ -94,6 +96,25 @@ function conversationKey(
   }
   const ts = thread_ts ?? event_ts ?? "0";
   return `slack:${team_id}:${channel}:${ts}`;
+}
+
+/**
+ * Translate Slack's `event.user` into the canonical `IntegrationSender`
+ * shape. Returns `undefined` when the event has no user id (rare — system
+ * events like channel_join). The handle / display name lookup is
+ * best-effort and degrades to id-only on any failure.
+ */
+async function buildSender(
+  user_id: string | undefined,
+  team_id: string,
+  install: IntegrationInstall,
+): Promise<IntegrationSender | undefined> {
+  if (!user_id) return undefined;
+  const sender: IntegrationSender = { provider: "slack", id: user_id };
+  const resolved = await resolveSlackUser(install, team_id, user_id);
+  if (resolved?.handle) sender.handle = resolved.handle;
+  if (resolved?.display_name) sender.display_name = resolved.display_name;
+  return sender;
 }
 
 export function buildWebhookAdapter(): WebhookAdapter {
@@ -188,6 +209,13 @@ export function buildWebhookAdapter(): WebhookAdapter {
         e.ts,
       );
 
+      // Resolve the sender identity so the agent knows who it's talking
+      // to. The id alone is always available; the handle / display name
+      // come from a best-effort `users.info` call (needs `users:read`
+      // scope). If lookup fails we still propagate the raw id — the agent
+      // can `<@U…>`-mention back even without the friendly name.
+      const sender = await buildSender(e.user, teamId, install);
+
       return {
         kind: "message",
         external_session_id: externalSessionId,
@@ -197,6 +225,7 @@ export function buildWebhookAdapter(): WebhookAdapter {
         // immediate `:eyes:` reaction on the user's actual message rather
         // than the thread root.
         original_ts: e.ts,
+        sender,
         thread_context: threadContext ?? undefined,
       };
     },

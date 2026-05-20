@@ -34,6 +34,7 @@ import {
   isHardConnectFailure,
 } from "@/server/harness";
 import { safeStopTask } from "@/server/reconcile";
+import { withSenderHeader } from "@/server/integrations/core/sender";
 import {
   ensureFlushLoop,
   getCachedSession,
@@ -97,12 +98,20 @@ export async function POST(req: Request, ctx: RouteContext) {
       httpError(404, `session ${session_id} not found or not ready`);
     }
 
+    // Apply the `[from: …]` header on the text path only — callers that
+    // ship pre-built `parts` already know what they want to send and
+    // explicitly opt out of header injection. Mirror the session-create
+    // path so a Slack follow-up looks identical to the first turn.
+    const textWithSender = body.parts
+      ? body.text
+      : withSenderHeader(body.text ?? "", body.sender);
+
     // The zod schema accepts arbitrary `Record<string, unknown>` parts to
     // stay drop-in compatible with the Python harness wire format; the
     // harness itself validates the `type` discriminator, so we trust the
     // shape here and cast to the runtime contract.
     const parts = expandMessage(
-      body.text,
+      textWithSender,
       body.parts as HarnessMessagePart[] | undefined,
       body.attachments,
     );

@@ -42,6 +42,10 @@ import {
   harnessSendMessage,
 } from "@/server/harness";
 import {
+  type SenderBody,
+  withSenderHeader,
+} from "@/server/integrations/core/sender";
+import {
   CreateSessionBody,
   HttpError,
   httpError,
@@ -85,6 +89,8 @@ interface BringUpBody {
   title?: string;
   env_vars?: Record<string, string>;
   initial_attachments?: InitialAttachment[];
+  /** Author of the inbound integration message — see `withSenderHeader`. */
+  sender?: SenderBody;
 }
 
 // ---------------------------------------------------------------------------
@@ -375,12 +381,17 @@ async function finishBringUp(
   // The .catch is critical: an unhandled rejection here would crash the
   // Node process since this promise is no longer awaited.
   if (body.initial_prompt || (body.initial_attachments && body.initial_attachments.length > 0)) {
+    // Prepend the `[from: …]` sender header here (not at the route entry)
+    // so the prefix lands on the harness wire ONLY when the prompt is
+    // actually delivered. Callers without a sender keep an empty / unmodified
+    // prompt, matching pre-existing behavior.
+    const prompt = withSenderHeader(body.initial_prompt ?? "", body.sender);
     void runInitialPrompt(
       agent,
       session_id,
       sandbox_url,
       harness_session_id,
-      body.initial_prompt ?? "",
+      prompt,
       body.initial_attachments,
     );
   }

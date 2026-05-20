@@ -22,7 +22,8 @@
         "im:history",
         "im:read",
         "im:write",
-        "reactions:write"
+        "reactions:write",
+        "users:read"
       ]
     }
   },
