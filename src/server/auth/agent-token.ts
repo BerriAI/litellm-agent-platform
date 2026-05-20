@@ -43,11 +43,10 @@ const ACCESS_TOKEN_TTL_SEC = 15 * 60;
 // reaper plus a generous slack. When the pod dies the token is moot.
 const REFRESH_TOKEN_TTL_SEC = 24 * 60 * 60;
 
-// Scopes we currently mint. The full set is just "memory" until we
-// extend the JWT path to other route classes; keeping this a string-array
-// so the call site reads naturally (`scope: ["memory"]`) and so we don't
-// have to migrate token payloads when we add the second one.
-export type AgentScope = "memory";
+// Scopes we currently mint. Keeping this a string-union so the call site
+// reads naturally (`scope: ["memory", "preview"]`) and so we don't have to
+// migrate token payloads when we add new scopes.
+export type AgentScope = "memory" | "preview";
 
 interface BaseClaims {
   /** "access" — a regular bearer that authorizes requests under `scope`. */

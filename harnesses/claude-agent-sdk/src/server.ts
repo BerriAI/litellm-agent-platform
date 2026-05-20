@@ -732,17 +732,24 @@ app.get("/event", (c) =>
 
 app.all("/proxy/:port/*", async (c) => {
   const port = c.req.param("port");
+  if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    return c.text("invalid port", 400);
+  }
   const url = new URL(c.req.url);
-  const rest = url.pathname.replace(new RegExp(`^/proxy/${port}`), "") || "/";
+  const rest = url.pathname.replace(`/proxy/${port}`, "") || "/";
   const target = `http://localhost:${port}${rest}${url.search}`;
   const headers = new Headers(c.req.raw.headers);
   headers.delete("host");
-  const resp = await fetch(target, {
-    method: c.req.method,
-    headers,
-    body: ["GET", "HEAD"].includes(c.req.method) ? undefined : c.req.raw.body,
-  });
-  return new Response(resp.body, { status: resp.status, headers: resp.headers });
+  try {
+    const resp = await fetch(target, {
+      method: c.req.method,
+      headers,
+      body: ["GET", "HEAD"].includes(c.req.method) ? undefined : c.req.raw.body,
+    });
+    return new Response(resp.body, { status: resp.status, headers: resp.headers });
+  } catch (e) {
+    return c.text(`proxy error: ${e instanceof Error ? e.message : String(e)}`, 502);
+  }
 });
 
 app.all("/proxy/:port", (c) =>

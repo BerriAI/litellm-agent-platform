@@ -496,7 +496,7 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
     // scope set so /agent-auth/refresh can re-derive the grant without a
     // hardcoded default. Widening this list is the only place to edit when
     // new agent scopes are added.
-    const agentScopes: AgentScope[] = ["memory"];
+    const agentScopes: AgentScope[] = ["memory", "preview"];
     out.push({
       name: "REAL_LAP_ACCESS_TOKEN",
       value: mintAgentAccessToken({
