@@ -368,11 +368,13 @@ interface TurnStreamState {
   // blocks have been started, so we just read straight from this map by
   // ev.message.id.
   blockIdxsBySdkMsgId: Map<string, number[]>;
-  // Accumulated thinking text per globalIdx. The final `assistant` event
-  // delivers thinking blocks with block.thinking="" when the SDK doesn't
-  // re-aggregate streaming deltas into the complete message. Fall back to
-  // this map so the persisted parts array has the full reasoning text.
-  thinkingAccum: Map<number, string>;
+  // Accumulated thinking text keyed by "${sdkMsgId}:${blockIndex}". Keying
+  // by (sdkMsgId, blockIndex) — not globalIdx — ensures the assistant event
+  // lookup succeeds even when blockIdxsBySdkMsgId misses (e.g. message_start
+  // arrived without an id) and we fall back to fresh globalIdxs. The final
+  // `assistant` event delivers block.thinking="" when the SDK doesn't
+  // re-aggregate streaming thinking_delta events; we fall back to this map.
+  thinkingAccum: Map<string, string>;
 }
 
 function handleSdkEvent(
@@ -442,7 +444,8 @@ function handleSdkEvent(
         // The SDK doesn't always re-aggregate streaming thinking_delta events
         // into the final assistant message — fall back to what we accumulated
         // from the stream so the history entry has the full reasoning text.
-        const streamAccum = turn.thinkingAccum.get(globalIdx) ?? "";
+        const thinkingKey = sdkMsgId ? `${sdkMsgId}:${idx}` : `_:${idx}`;
+        const streamAccum = turn.thinkingAccum.get(thinkingKey) ?? "";
         const part: PlatformPart = {
           id: partId,
           type: "thinking",
@@ -556,8 +559,14 @@ function handleSdkEvent(
         // to bundle thinking (no thinking_delta); sonnet/opus stream it.
         // Accumulate into thinkingAccum so the final assistant event can
         // fall back to this text if block.thinking arrives empty.
-        const prev = turn.thinkingAccum.get(globalIdx) ?? "";
-        turn.thinkingAccum.set(globalIdx, prev + inner.delta.thinking);
+        // Key by "${sdkMsgId}:${blockIndex}" — not globalIdx — so the
+        // assistant event lookup succeeds even when blockIdxsBySdkMsgId
+        // misses (e.g. message_start had no id) and fresh globalIdxs differ.
+        const thinkingKey = turn.currentSdkMsgId
+          ? `${turn.currentSdkMsgId}:${inner.index}`
+          : `_:${inner.index}`;
+        const prev = turn.thinkingAccum.get(thinkingKey) ?? "";
+        turn.thinkingAccum.set(thinkingKey, prev + inner.delta.thinking);
         emit(s, "message.part.delta", {
           messageID: msgId,
           partID,

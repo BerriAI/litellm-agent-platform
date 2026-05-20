@@ -660,6 +660,23 @@ export default function SessionThreadView() {
                 ? (part as Record<string, unknown>).id
                 : undefined;
               if (part && typeof rawId === "string") {
+                // Guard: if this is a thinking part with empty text, preserve
+                // whatever text the delta stream already accumulated. The SDK
+                // sometimes delivers block.thinking="" in the final assistant
+                // event when streaming thinking_delta events were also sent;
+                // the harness falls back to thinkingAccum but that lookup can
+                // miss if sdkMsgId didn't match. Keep the delta-built text so
+                // the thinking block stays visible.
+                if (
+                  (part as { type?: string }).type === "thinking" &&
+                  !(part as { text?: string }).text
+                ) {
+                  const existing = partsState.get(rawId);
+                  const existingText = (existing as { text?: string } | undefined)?.text;
+                  if (existingText) {
+                    (part as { text?: string }).text = existingText;
+                  }
+                }
                 partsState.set(rawId, part);
                 renderStreaming();
               }
