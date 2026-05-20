@@ -113,9 +113,13 @@ export function buildRecordingMcpServer(): McpSdkServerConfigWithInstance {
       const s = sessions.get(input.session_id);
       if (!s) return err(`No recording session: ${input.session_id}`);
       try {
-        await s.page.goto(input.url, { waitUntil: "networkidle", timeout: 30000 });
-      } catch {
-        await s.page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        try {
+          await s.page.goto(input.url, { waitUntil: "networkidle", timeout: 30000 });
+        } catch {
+          await s.page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        }
+      } catch (e) {
+        return err(`Navigate failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       return ok(`Navigated to ${input.url}`);
     },
@@ -131,7 +135,7 @@ export function buildRecordingMcpServer(): McpSdkServerConfigWithInstance {
       session_id: z.string(),
       text: z.string().optional().describe("Visible text of the element to click (partial match OK)"),
       selector: z.string().optional().describe("CSS selector — used only when text is not provided"),
-      wait_after_ms: z.number().optional().describe("Ms to wait after click for UI to settle, default 800"),
+      wait_after_ms: z.number().min(0).max(10000).optional().describe("Ms to wait after click for UI to settle, default 800 (capped at 10 000 ms)"),
     },
     async (input: {
       session_id: string;
