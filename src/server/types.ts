@@ -1034,5 +1034,5 @@ export function resolveHarnessImage(
 export const SESSION_CREATING_TIMEOUT_MS = 600_000;
 // Ready sessions with no message activity (last_seen_at) older than this are
 // reaped by the reconciler — keeps cluster footprint bounded for forgotten tabs.
-export const SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+export const SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 export const RECONCILE_NEW_TASK_GRACE_MS = 300_000;
