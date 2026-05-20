@@ -576,15 +576,6 @@ async function waitForSessionReadyRow(
   return null;
 }
 
-function lastAssistantFolded(
-  folded: ReturnType<typeof foldSdkMessages>,
-): ReturnType<typeof foldSdkMessages>[number] | undefined {
-  for (let i = folded.length - 1; i >= 0; i--) {
-    if (folded[i].type === "assistant") return folded[i];
-  }
-  return undefined;
-}
-
 async function streamForwardToIntegration(session_id: string): Promise<void> {
   const ready = await waitForSessionReadyRow(session_id);
   if (!ready) return;
@@ -592,16 +583,25 @@ async function streamForwardToIntegration(session_id: string): Promise<void> {
 
   const ctl = new AbortController();
   const deadline = setTimeout(() => ctl.abort(), STREAM_DEADLINE_MS);
-  const sdk: SDKMessage[] = [];
+  // Per-turn buffer (reset on session.idle) so we aggregate THIS turn only.
+  const turnSdk: SDKMessage[] = [];
   let turnIndex = 0;
   let lastSentAt = 0;
   let lastKey = "";
   let sentAny = false;
 
   const emit = async (final: boolean) => {
-    const fa = lastAssistantFolded(foldSdkMessages(sdk));
-    if (!fa) return;
-    const { text, activity } = deriveTurnView(fa);
+    // Accumulate the assistant text across every step of the turn so the
+    // response always stays put; the activity (latest tool/thinking) is just a
+    // subtext line. A tool-only step must NOT blank out earlier response text.
+    let text = "";
+    let activity = "";
+    for (const f of foldSdkMessages(turnSdk)) {
+      if (f.type !== "assistant") continue;
+      const v = deriveTurnView(f);
+      if (v.text) text = text ? `${text}\n\n${v.text}` : v.text;
+      activity = v.activity; // trailing activity of the latest assistant step
+    }
     if (!text && !activity) return;
     const dedup = `${turnIndex}|${text}|${final ? "" : activity}`;
     if (!final && dedup === lastKey) return;
@@ -646,7 +646,7 @@ async function streamForwardToIntegration(session_id: string): Promise<void> {
         const sid = evt.properties?.sessionID;
         if (sid && sid !== harness_session_id) continue;
         if (evt.type === "claude_sdk_message" && evt.properties?.message) {
-          sdk.push(evt.properties.message);
+          turnSdk.push(evt.properties.message);
           const now = Date.now();
           if (now - lastSentAt > STREAM_THROTTLE_MS) {
             lastSentAt = now;
@@ -654,6 +654,7 @@ async function streamForwardToIntegration(session_id: string): Promise<void> {
           }
         } else if (evt.type === "session.idle") {
           await emit(true);
+          turnSdk.length = 0; // next turn starts fresh
           turnIndex += 1;
           lastSentAt = 0;
           lastKey = "";
