@@ -120,13 +120,10 @@ export function useSdkMessageStream(
         if (parsed.type === "claude_sdk_message") {
           const sdk = (parsed as ClaudeSdkMessageFrame).properties?.message;
           if (!sdk) return;
-          // DEBUG: log sdk message type so we can confirm thinking arrives here
-          console.log("[sdk-stream] claude_sdk_message", JSON.stringify(sdk).slice(0, 200));
           setMessages((prev) => [...prev, sdk]);
           return;
         }
         if (TERMINAL_TYPES.has(parsed.type)) {
-          console.log("[sdk-stream] terminal event:", parsed.type);
           if (parsed.type === "session.idle") setStatus("completed");
           else if (parsed.type === "session.error") setStatus("error");
           else if (parsed.type === "session.aborted") setStatus("aborted");

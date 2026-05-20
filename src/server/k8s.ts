@@ -474,7 +474,12 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
     try {
       out.push({ name: `REAL_${k}`, value: decrypt(v) });
     } catch (e) {
-      console.warn(`buildVaultEnv: skipping env var ${k} — decrypt failed (missing ENCRYPTION_KEY?): ${e instanceof Error ? e.message : String(e)}`);
+      // Only tolerate decrypt failures when ENCRYPTION_KEY is absent — that's
+      // the local-dev path where encrypted values can't be opened. If the key
+      // IS set and decryption still fails the agent's secrets would be silently
+      // missing from the vault spec, so we rethrow to give a clear error.
+      if (process.env.ENCRYPTION_KEY) throw e;
+      console.warn(`buildVaultEnv: skipping env var ${k} — decrypt failed (ENCRYPTION_KEY not set): ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   // MASTER_KEY is the shared secret both sides hash to derive the
