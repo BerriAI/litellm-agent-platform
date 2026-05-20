@@ -36,6 +36,10 @@ import {
   waitHttpReady,
   waitRunningGetUrl,
 } from "@/server/k8s";
+import {
+  clearInlineBrainSession,
+  createInlineBrainSession,
+} from "@/server/inlineBrain";
 import { invalidateSession, putCachedSession } from "@/server/sessionCache";
 import {
   expandMessage,
@@ -44,6 +48,7 @@ import {
   harnessSendMessage,
 } from "@/server/harness";
 import {
+  HARNESS_BRAIN_INLINE,
   HttpError,
   httpError,
   toApiSession,
@@ -85,6 +90,32 @@ export async function POST(req: Request, ctx: RouteContext) {
     const previousHistory = Array.isArray(row.history)
       ? (row.history as unknown as HarnessMessage[])
       : null;
+
+    // Fast path for brain-inline: no pod to stop/start. Tear down the old
+    // in-process state, start a fresh in-process session, and immediately
+    // flip back to `ready`. History is retained in the DB row (row.history)
+    // and remains visible via GET /messages, but the in-process conversation
+    // context starts clean — matching the K8s path where the sandbox is fresh.
+    if (agent.harness_id === HARNESS_BRAIN_INLINE) {
+      clearInlineBrainSession(session_id);
+      createInlineBrainSession(session_id, agent);
+
+      const updated = await prisma.session.update({
+        where: { session_id },
+        data: { status: "ready", failure_reason: null, last_seen_at: new Date() },
+      });
+      invalidateSession(session_id);
+      putCachedSession({
+        session_id,
+        agent_id: agent.agent_id,
+        agent_model: agent.model,
+        harness_id: agent.harness_id,
+        sandbox_url: "",
+        harness_session_id: "",
+        status: "ready",
+      });
+      return Response.json(toApiSession(updated, null, null, agent.harness_id));
+    }
 
     // Best-effort: try to stop the old task before we forget its ARN. If it's
     // already stopped or the call fails for any reason, swallow — leaving an

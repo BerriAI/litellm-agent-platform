@@ -13,9 +13,10 @@ app.get("/health", (c) => {
 
 app.post("/execute", async (c) => {
   const { cmd } = await c.req.json<{ cmd: string }>();
+  const cwd = process.env.REPO_DIR ?? undefined;
 
   try {
-    const { stdout, stderr } = await execAsync(cmd, { timeout: 300_000 });
+    const { stdout, stderr } = await execAsync(cmd, { timeout: 300_000, cwd });
     const output = [stdout, stderr].filter(Boolean).join("\n");
     return c.json({ output, exit_code: 0 });
   } catch (err: unknown) {

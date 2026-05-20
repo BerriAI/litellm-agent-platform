@@ -15,8 +15,9 @@ import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { buildSessionOrigin } from "@/server/integrations/core/origin";
 import { stopTask } from "@/server/k8s";
+import { clearInlineBrainSession } from "@/server/inlineBrain";
 import { invalidateSession } from "@/server/sessionCache";
-import { HttpError, httpError, toApiSession } from "@/server/types";
+import { HttpError, httpError, toApiSession, HARNESS_BRAIN_INLINE } from "@/server/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,7 +69,10 @@ export async function DELETE(req: Request, ctx: RouteContext) {
   try {
     assertAuth(req);
     const { session_id } = await ctx.params;
-    const row = await prisma.session.findUnique({ where: { session_id } });
+    const row = await prisma.session.findUnique({
+      where: { session_id },
+      include: { agent: { select: { harness_id: true } } },
+    });
     if (!row) httpError(404, `session ${session_id} not found`);
 
     // Idempotent: if already terminal, ack without touching ECS again.
@@ -88,6 +92,11 @@ export async function DELETE(req: Request, ctx: RouteContext) {
     // Drop the hot-path cache entry so the next message attempt observes the
     // dead state instead of forwarding to a torn-down sandbox.
     invalidateSession(session_id);
+
+    // Release in-process brain state for brain-inline sessions.
+    if (row.agent.harness_id === HARNESS_BRAIN_INLINE) {
+      clearInlineBrainSession(session_id);
+    }
 
     return Response.json({ id: session_id, status: "deleted" });
   } catch (e) {

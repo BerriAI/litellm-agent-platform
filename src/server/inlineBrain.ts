@@ -49,6 +49,12 @@ interface SessionState {
 // ---------------------------------------------------------------------------
 
 const sessions = new Map<string, SessionState>();
+// Per-session in-flight lock: maps session_id → promise of the active agent
+// loop. Serialises concurrent messages so interleaved pushes cannot corrupt
+// the shared messages array.
+const inflight = new Map<string, Promise<string>>();
+
+const MAX_TOOL_ROUNDS = 20;
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -174,11 +180,19 @@ async function runAgentLoop(
   state: SessionState,
   onEvent?: (e: BrainEvent) => void,
 ): Promise<string> {
+  let rounds = 0;
   for (;;) {
+    if (rounds >= MAX_TOOL_ROUNDS) {
+      throw new Error(
+        `brain-inline agent loop exceeded ${MAX_TOOL_ROUNDS} tool-call rounds for session ${session_id}`,
+      );
+    }
+
     const choice = await callLiteLLM(state.messages, state.agent.model);
     const msg = choice.message;
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
+      rounds++;
       state.messages.push({
         role: "assistant",
         content: msg.content ?? null,
@@ -246,14 +260,23 @@ export async function sendInlineBrainMessage(
   agent: AgentRow,
   onEvent?: (e: BrainEvent) => void,
 ): Promise<{ response: string }> {
-  let state = sessions.get(session_id);
-  if (!state) {
-    createInlineBrainSession(session_id, agent);
-    state = sessions.get(session_id)!;
-  }
+  // Serialize: if a loop is already running for this session, wait for it to
+  // complete before starting the next turn. This prevents concurrent requests
+  // from interleaving messages on the shared state.messages array.
+  const prior = inflight.get(session_id) ?? Promise.resolve("");
+  const turn = prior.then(async () => {
+    let state = sessions.get(session_id);
+    if (!state) {
+      createInlineBrainSession(session_id, agent);
+      state = sessions.get(session_id)!;
+    }
+    state.messages.push({ role: "user", content: text });
+    return runAgentLoop(session_id, state, onEvent);
+  });
 
-  state.messages.push({ role: "user", content: text });
-  const response = await runAgentLoop(session_id, state, onEvent);
+  // Keep only the tail of the chain so GC can collect completed turns.
+  inflight.set(session_id, turn.catch(() => ""));
+  const response = await turn;
   return { response };
 }
 
@@ -263,22 +286,26 @@ export function listInlineBrainMessages(
   const state = sessions.get(session_id);
   if (!state) return [];
 
-  return state.messages
-    .filter(
-      (m): m is ChatMessage & { role: "user" | "assistant" } =>
-        m.role === "user" || m.role === "assistant",
-    )
-    .map((m, i) => ({
-      info: {
-        id: `brain-inline-${session_id}-${i}`,
-        sessionID: session_id,
-        role: m.role,
-      },
-      parts: [{ type: "text", text: m.content ?? "" }],
-    }));
+  // Use the absolute index in the full messages array (not the filtered slice)
+  // so IDs are stable across calls even as history grows.
+  type Indexed = { m: ChatMessage; absoluteIndex: number };
+  const indexed: Indexed[] = state.messages.map((m, absoluteIndex) => ({ m, absoluteIndex }));
+  const visible = indexed.filter(
+    (entry): entry is Indexed & { m: ChatMessage & { role: "user" | "assistant" } } =>
+      entry.m.role === "user" || entry.m.role === "assistant",
+  );
+  return visible.map(({ m, absoluteIndex }) => ({
+    info: {
+      id: `brain-inline-${session_id}-${absoluteIndex}`,
+      sessionID: session_id,
+      role: m.role,
+    },
+    parts: [{ type: "text", text: m.content ?? "" }],
+  }));
 }
 
 export function clearInlineBrainSession(session_id: string): void {
   clearSandboxes(session_id);
   sessions.delete(session_id);
+  inflight.delete(session_id);
 }

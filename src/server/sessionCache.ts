@@ -15,6 +15,7 @@
  */
 
 import { prisma } from "@/server/db";
+import { HARNESS_BRAIN_INLINE } from "@/server/types";
 
 export interface SessionCacheEntry {
   session_id: string;
@@ -69,13 +70,15 @@ async function hydrate(
     where: { session_id },
     include: { agent: true },
   });
-  if (
-    !row
-    || row.status !== "ready"
-    || !row.sandbox_url
-    || !row.harness_session_id
-    || !row.agent
-  ) {
+  if (!row || row.status !== "ready" || !row.agent) {
+    return null;
+  }
+  // brain-inline sessions never write sandbox_url / harness_session_id to the
+  // DB — the in-process brain needs neither. Skip those checks for this
+  // harness so that cache misses (process restart, cache eviction) can still
+  // hydrate correctly rather than permanently returning null/404.
+  const isBrainInline = row.agent.harness_id === HARNESS_BRAIN_INLINE;
+  if (!isBrainInline && (!row.sandbox_url || !row.harness_session_id)) {
     return null;
   }
   const entry: SessionCacheEntry = {
@@ -83,8 +86,8 @@ async function hydrate(
     agent_id: row.agent_id,
     agent_model: row.agent.model,
     harness_id: row.agent.harness_id,
-    sandbox_url: row.sandbox_url,
-    harness_session_id: row.harness_session_id,
+    sandbox_url: row.sandbox_url ?? "",
+    harness_session_id: row.harness_session_id ?? "",
     status: row.status,
   };
   putCachedSession(entry);
