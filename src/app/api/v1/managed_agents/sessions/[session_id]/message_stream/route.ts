@@ -135,6 +135,7 @@ export async function POST(req: Request, ctx: RouteContext) {
               session_id,
               body.text ?? "",
               row.agent,
+              (e) => enq({ type: "harness_event", event: e }),
             );
             enq({
               type: "harness_event",

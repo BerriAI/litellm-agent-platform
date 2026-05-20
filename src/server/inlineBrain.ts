@@ -164,41 +164,48 @@ async function dispatchTool(
 // Agent loop
 // ---------------------------------------------------------------------------
 
+type BrainEvent =
+  | { type: "tool_call"; name: string; input: unknown }
+  | { type: "tool_result"; name: string; output: string }
+  | { type: "assistant_text"; text: string };
+
 async function runAgentLoop(
   session_id: string,
   state: SessionState,
+  onEvent?: (e: BrainEvent) => void,
 ): Promise<string> {
   for (;;) {
     const choice = await callLiteLLM(state.messages, state.agent.model);
     const msg = choice.message;
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
-      const assistantMsg: ChatMessage = {
+      state.messages.push({
         role: "assistant",
         content: msg.content ?? null,
         tool_calls: msg.tool_calls,
-      };
-      state.messages.push(assistantMsg);
+      });
 
       for (const tc of msg.tool_calls) {
+        let input: unknown;
+        try { input = JSON.parse(tc.function.arguments); } catch { input = tc.function.arguments; }
+        onEvent?.({ type: "tool_call", name: tc.function.name, input });
+
         const result = await dispatchTool(
           session_id,
           state.agent,
           tc.function.name,
           tc.function.arguments,
         );
-        state.messages.push({
-          role: "tool",
-          tool_call_id: tc.id,
-          content: result,
-        });
-      }
+        onEvent?.({ type: "tool_result", name: tc.function.name, output: result });
 
+        state.messages.push({ role: "tool", tool_call_id: tc.id, content: result });
+      }
       continue;
     }
 
     const text = msg.content ?? "";
     state.messages.push({ role: "assistant", content: text });
+    onEvent?.({ type: "assistant_text", text });
     return text;
   }
 }
@@ -237,6 +244,7 @@ export async function sendInlineBrainMessage(
   session_id: string,
   text: string,
   agent: AgentRow,
+  onEvent?: (e: BrainEvent) => void,
 ): Promise<{ response: string }> {
   let state = sessions.get(session_id);
   if (!state) {
@@ -245,7 +253,7 @@ export async function sendInlineBrainMessage(
   }
 
   state.messages.push({ role: "user", content: text });
-  const response = await runAgentLoop(session_id, state);
+  const response = await runAgentLoop(session_id, state, onEvent);
   return { response };
 }
 
