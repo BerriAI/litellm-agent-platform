@@ -14,6 +14,12 @@ export interface HarnessOption {
 
 export const HARNESS_OPTIONS: HarnessOption[] = [
   {
+    id: "brain-inline",
+    label: "brain-inline",
+    description: "Brain runs on the platform — no sandbox warmup. Claude provisions compute on demand when it needs to run code.",
+    mode: "CHAT",
+  },
+  {
     id: "opencode",
     label: "opencode",
     description: "Multi-provider via LiteLLM. Default — used by every existing agent.",
