@@ -124,11 +124,24 @@ export async function POST(req: Request, ctx: RouteContext) {
     }
     // brain-inline: no sandbox_url/harness_session_id — brain runs in-process.
     // Call inlineBrain and stream the response as a single SSE event sequence.
+    // The SSE comment (": keepalive") is emitted every 25 s to prevent proxy
+    // idle-connection timeouts during long tool-use sessions where there may be
+    // silent gaps between LiteLLM calls.
     if (row.agent.harness_id === "brain-inline") {
+      const KEEPALIVE_INTERVAL_MS = 25_000;
+      const keepaliveBytes = new TextEncoder().encode(": keepalive\n\n");
+
       const stream = new ReadableStream({
         async start(controller) {
           const enq = (payload: unknown) =>
             controller.enqueue(encodeSse(payload));
+
+          // Emit keepalive SSE comments on a fixed interval so proxies
+          // don't close idle connections during long tool-call chains.
+          const keepaliveTimer = setInterval(() => {
+            try { controller.enqueue(keepaliveBytes); } catch { /* stream may be closed */ }
+          }, KEEPALIVE_INTERVAL_MS);
+
           try {
             enq({ type: "ready" });
             const { response } = await sendInlineBrainMessage(
@@ -155,6 +168,7 @@ export async function POST(req: Request, ctx: RouteContext) {
             });
             enq({ type: "done" });
           } finally {
+            clearInterval(keepaliveTimer);
             controller.close();
           }
         },
