@@ -64,6 +64,12 @@ function agentLabel(a: AgentRow): string {
 }
 
 function sessionLabel(s: SessionRow): string {
+  // Prefer the first-user-message preview the server projects from the
+  // harness thread snapshot — far more recognisable than a UUID prefix.
+  // Fall back to the short-id for brand-new sessions with no user turn
+  // recorded yet, and for legacy rows whose history pre-dates the field.
+  const preview = s.title_preview?.trim();
+  if (preview) return preview;
   return `Session ${shortId(s.id)}`;
 }
 

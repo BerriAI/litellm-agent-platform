@@ -104,6 +104,7 @@ export async function POST(req: Request, ctx: RouteContext) {
     const parts = expandMessage(
       body.text,
       body.parts as HarnessMessagePart[] | undefined,
+      body.attachments,
     );
 
     let response;

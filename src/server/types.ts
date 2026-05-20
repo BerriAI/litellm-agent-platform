@@ -15,6 +15,7 @@
 import type { Agent, Memory, Session, WarmTask } from "@prisma/client";
 import { z } from "zod";
 import { decrypt, encrypt } from "@/server/integrations/core/crypto";
+import type { SessionOrigin } from "@/server/integrations/core/origin";
 import { parseAttachedSkillIds } from "@/server/skill-prompt";
 
 // ============================================================================
@@ -319,8 +320,20 @@ export type CreateSessionBody = z.infer<typeof CreateSessionBody>;
 export const SendMessageBody = z.object({
   text: z.string().optional(),
   parts: z.array(z.record(z.string(), z.unknown())).optional(),
+  /**
+   * Inline binary content (images today) attached to `text`. Same shape and
+   * caps as `CreateSessionBody.initial_attachments` — see that field for the
+   * rationale. The route lifts each entry into a Claude-format multimodal
+   * `image` part alongside the text, mirroring `runInitialPrompt`. Mutually
+   * exclusive with `parts` (caller picks one path).
+   */
+  attachments: z
+    .array(InitialAttachment)
+    .max(INITIAL_ATTACHMENTS_MAX_COUNT)
+    .optional(),
 });
 export type SendMessageBody = z.infer<typeof SendMessageBody>;
+export type MessageAttachment = z.infer<typeof InitialAttachment>;
 
 // Memory bodies — see src/server/memory.ts for the model.
 // `source` is set by the handler (slack/ui/agent depending on the entry
@@ -448,6 +461,16 @@ export interface ApiSession {
   // Optional human-readable detail for the current phase. Rendered as a
   // small subtitle under the active step in the spawn-progress card.
   phase_detail: string | null;
+  // Present when the session was created by an integration webhook
+  // (Slack DM/@-mention, Linear assign, etc.) rather than the LAP UI.
+  // The session view renders a banner at the top with a deep link back
+  // to the originating thread. Null for UI-originated sessions.
+  origin: SessionOrigin | null;
+  // First user-message text from the session thread, truncated. The sidebar
+  // uses this as a row label so users can recognise sessions by content
+  // instead of opaque short-ids. Null on brand-new sessions where no user
+  // turn has been recorded yet — the UI falls back to `Session {shortId}`.
+  title_preview: string | null;
 }
 
 // Admin / observability — wire shape returned by GET /api/v1/admin/stats.
@@ -821,9 +844,62 @@ export function toApiMemory(row: MemoryRow): ApiMemory {
   };
 }
 
+// Hard cap on the sidebar title preview. Long enough to be recognisable
+// across the agent's typical first prompts, short enough that the sidebar
+// stays compact on a small viewport.
+const TITLE_PREVIEW_MAX_LENGTH = 60;
+
+/**
+ * Pull the first user-message text from the cached harness thread snapshot
+ * and trim it for the sidebar label. The `history` column on `Session` is
+ * the canonical opencode thread shape: `[{info: {role, ...}, parts: [...]}, ...]`
+ * — we walk user-role entries in order, concatenate their text-typed parts,
+ * and return the first non-empty one truncated to TITLE_PREVIEW_MAX_LENGTH.
+ *
+ * Pure non-text user turns (e.g. an image upload with no caption, a
+ * tool_result on the user side) are skipped — we keep scanning so a later
+ * text turn still produces a useful label. Returns null only when no user
+ * turn in the thread carries any text at all (brand-new session, or a
+ * thread that is image-only end-to-end). Caller falls back to the short-id.
+ */
+function extractTitlePreview(history: unknown): string | null {
+  if (!Array.isArray(history)) return null;
+  for (const msg of history) {
+    if (!msg || typeof msg !== "object") continue;
+    const info = (msg as { info?: unknown }).info as
+      | { role?: unknown }
+      | undefined;
+    if (!info || info.role !== "user") continue;
+    const parts = (msg as { parts?: unknown }).parts;
+    if (!Array.isArray(parts)) continue;
+    const text = parts
+      .filter(
+        (p): p is { type: string; text: string } =>
+          !!p &&
+          typeof p === "object" &&
+          (p as { type?: unknown }).type === "text" &&
+          typeof (p as { text?: unknown }).text === "string",
+      )
+      .map((p) => p.text)
+      .join("")
+      .trim();
+    // Skip image-only / tool-result-only user turns and keep scanning — the
+    // next user turn's caption is a better label than the short-id fallback.
+    if (!text) continue;
+    // Collapse internal whitespace so multi-line prompts render on one line
+    // without trailing "\n" artefacts.
+    const oneLine = text.replace(/\s+/g, " ");
+    return oneLine.length > TITLE_PREVIEW_MAX_LENGTH
+      ? `${oneLine.slice(0, TITLE_PREVIEW_MAX_LENGTH - 1)}…`
+      : oneLine;
+  }
+  return null;
+}
+
 export function toApiSession(
   row: SessionRow,
   response: HarnessMessageResponse | null = null,
+  origin: SessionOrigin | null = null,
 ): ApiSession {
   // tty_token comes from the shared HARNESS_AUTH_TOKEN env var the platform
   // also propagates into sandbox pods (via CONTAINER_ENV_HARNESS_AUTH_TOKEN
@@ -869,6 +945,8 @@ export function toApiSession(
     failure_reason: row.failure_reason ?? null,
     phase: row.phase ?? null,
     phase_detail: row.phase_detail ?? null,
+    origin,
+    title_preview: extractTitlePreview(row.history),
   };
 }
 

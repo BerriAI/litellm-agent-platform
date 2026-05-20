@@ -14,6 +14,7 @@ import type {
   HarnessMessagePart,
   HarnessMessageResponse,
   HarnessSendMessageOpts,
+  MessageAttachment,
 } from "./types";
 
 // 60s is plenty for /session create. Message responses can run minutes when
@@ -73,10 +74,29 @@ export function isDeadSessionError(err: unknown): boolean {
 export function expandMessage(
   text?: string,
   parts?: HarnessMessagePart[],
+  attachments?: MessageAttachment[],
 ): HarnessMessagePart[] {
+  // Build Claude-format multimodal parts when attachments are present. Text
+  // part first, then each image as a base64 source — matches the Anthropic
+  // API content-block shape, which the claude-agent-sdk harness forwards
+  // verbatim. Mirrors `runInitialPrompt` so the wire shape stays identical
+  // between session-create and follow-up sends.
+  if (attachments && attachments.length > 0) {
+    return [
+      ...(text !== undefined && text !== "" ? [{ type: "text", text }] : []),
+      ...attachments.map((a) => ({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: a.mime_type,
+          data: a.base64,
+        },
+      })),
+    ];
+  }
   if (parts !== undefined) return parts;
   if (text !== undefined) return [{ type: "text", text }];
-  throw new Error("message body must include 'text' or 'parts'");
+  throw new Error("message body must include 'text', 'parts', or 'attachments'");
 }
 
 async function postJson(

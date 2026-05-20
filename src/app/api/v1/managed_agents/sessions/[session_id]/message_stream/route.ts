@@ -94,6 +94,7 @@ export async function POST(req: Request, ctx: RouteContext) {
     const parts = expandMessage(
       body.text,
       body.parts as HarnessMessagePart[] | undefined,
+      body.attachments,
     );
 
     // Bind to locals so TS narrows past the null guard inside the closure.

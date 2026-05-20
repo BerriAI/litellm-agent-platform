@@ -222,6 +222,31 @@ export interface SessionRow {
   // Optional human-readable detail for the current phase. Rendered as a
   // small subtitle under the active step.
   phase_detail?: string | null;
+  // Set when the session was kicked off by an integration webhook
+  // (Slack DM/@-mention, Linear assign, …) rather than the LAP UI. The
+  // session view renders a small banner with a deep link back to the
+  // originating thread. Null for sessions created from the UI.
+  origin?: SessionOrigin | null;
+  // First user-message text from the session thread, truncated to ~60 chars.
+  // Used by the sidebar so rows show what each session is about instead of
+  // an opaque short-id. Null on brand-new sessions or rows whose history has
+  // not yet been snapshotted — callers fall back to `Session {shortId}`.
+  title_preview?: string | null;
+}
+
+/**
+ * Wire-side description of which integration created this session and how
+ * to link back. Mirrors `SessionOrigin` in
+ * `src/server/integrations/core/origin.ts`. Today only Slack supplies a
+ * `url`; other integrations may leave it null until their deep-link
+ * helper is wired in.
+ */
+export interface SessionOrigin {
+  integration_id: string;
+  external_session_id: string;
+  external_ref: string | null;
+  workspace_name: string;
+  url: string | null;
 }
 
 /**
@@ -837,9 +862,23 @@ export async function getSessionInterceptions(
 
 // ---------- Session messages (passthrough to harness) ----------
 
+/**
+ * Inline binary content attached to a follow-up message. Matches the server's
+ * `MessageAttachment` shape — see `src/server/types.ts`. Images today; the
+ * route lifts each entry into a Claude-format multimodal `image` part.
+ */
+export interface SendMessageAttachment {
+  name?: string;
+  /** MIME type, e.g. "image/png". Required so the harness can route to vision. */
+  mime_type: string;
+  /** Raw file bytes, base64-encoded (no `data:` prefix). */
+  base64: string;
+}
+
 export interface SendMessageRequest {
   text?: string;
   parts?: HarnessMessagePart[];
+  attachments?: SendMessageAttachment[];
 }
 
 export function sendMessage(

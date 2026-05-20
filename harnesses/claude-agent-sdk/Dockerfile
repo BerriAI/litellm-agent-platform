@@ -12,6 +12,7 @@
 # NOTE: build context is the repo root. This Dockerfile lives under
 # harnesses/claude-agent-sdk/ but it COPYs the platform-level
 # `managed-tools/` package too:
+#   docker buildx build -f harnesses/base/Dockerfile -t harnesses/base:dev . && \
 #   docker buildx build -f harnesses/claude-agent-sdk/Dockerfile .
 
 FROM node:20-bookworm AS builder
@@ -34,35 +35,7 @@ COPY harnesses/claude-agent-sdk/src ./src
 RUN npx tsc
 
 # ------------------------------------------------------------------ runtime
-FROM node:20-bookworm-slim
-
-# gh CLI: pinned release + checksum (matches the opencode harness's posture).
-ARG GH_VERSION=2.92.0
-ARG GH_SHA256=8f8212b1a9cec261a8839e0893168f50d3fc70f095da257feef4229234cefdf8
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates bash python3 curl jq \
-    && curl -fsSL -o /tmp/gh.deb \
-         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.deb" \
-    && echo "${GH_SHA256}  /tmp/gh.deb" | sha256sum -c - \
-    && dpkg -i /tmp/gh.deb \
-    && rm /tmp/gh.deb \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd -m -u 1001 -s /bin/bash sandbox \
-    && mkdir -p /work \
-    && chown sandbox:sandbox /work
-
-# vault CA — baked into every trust path the sandbox uses, so every binary
-# (git/curl/python/node/the bundled `claude` SEA) accepts vault's MITM cert
-# without per-process env-var configuration. `update-ca-certificates`
-# handles the hash-symlinks; an explicit append covers the concatenated
-# bundle file (where Debian's `update-ca-certificates` is unreliable for
-# locally-added CAs); `openssl rehash` ensures the symlink dir is consistent.
-COPY vault/ca.crt /etc/ssl/certs/vault.crt
-RUN ln -sf /etc/ssl/certs/vault.crt /usr/local/share/ca-certificates/vault.crt \
-    && update-ca-certificates \
-    && cat /etc/ssl/certs/vault.crt >> /etc/ssl/certs/ca-certificates.crt \
-    && openssl rehash /etc/ssl/certs/
+FROM harnesses/base:dev
 
 # gitleaks — secret scanner used by security agent templates.
 # Uses Go-style arch names (x64/arm64), not dpkg names (amd64/arm64).
@@ -77,16 +50,6 @@ RUN case "$(uname -m)" in x86_64) GL_ARCH=x64 ;; aarch64) GL_ARCH=arm64 ;; *) GL
     && echo "${EXPECTED}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
     && tar -xz -C /usr/local/bin -f /tmp/gitleaks.tar.gz gitleaks \
     && rm /tmp/gitleaks.tar.gz /tmp/gitleaks_checksums.txt
-
-# uv — installed to a system path so $PATH already finds it for any user.
-# Static binary release; no shell pipe.
-ARG UV_VERSION=0.5.13
-RUN curl -fsSL -o /tmp/uv.tar.gz \
-      "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
-    && tar -xzf /tmp/uv.tar.gz -C /tmp \
-    && install -m 0755 "/tmp/uv-x86_64-unknown-linux-gnu/uv" /usr/local/bin/uv \
-    && install -m 0755 "/tmp/uv-x86_64-unknown-linux-gnu/uvx" /usr/local/bin/uvx \
-    && rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
 
 # Harness server — only the production node_modules + compiled JS. We do a
 # fresh `npm install --omit=dev` here so the runtime image doesn't carry
@@ -103,11 +66,22 @@ COPY --from=builder /build/managed-tools/dist /opt/managed-tools/dist
 WORKDIR /opt/managed-tools
 COPY managed-tools/.npmrc ./.npmrc
 RUN npm install --omit=dev --no-audit --no-fund --legacy-peer-deps
+# Playwright browsers — `npm install playwright` does NOT download browser
+# binaries since v1.38, so `screenshot_url` would fail at runtime without an
+# explicit install step. Pin the cache to /opt/ms-playwright (set BEFORE the
+# install) so the binary lands in a path the sandbox user can read at
+# runtime — the default location is $HOME/.cache/ms-playwright, which would
+# resolve to /root/.cache/ during build and be unreadable by `sandbox`.
+# Chromium system libs (libnss3, libxkbcommon0, fonts-liberation, etc.) are
+# already installed in harnesses/base, so `--with-deps` is not needed.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
 WORKDIR /opt/harnesses/claude-agent-sdk
 COPY --from=builder /build/harnesses/claude-agent-sdk/package.json ./
 COPY --from=builder /build/harnesses/claude-agent-sdk/dist ./dist
 RUN npm install --omit=dev --no-audit --no-fund --legacy-peer-deps \
-    && chown -R sandbox:sandbox /opt/harnesses /opt/managed-tools \
+    && npx --no-install playwright install chromium \
+    && chown -R sandbox:sandbox /opt/harnesses /opt/managed-tools /opt/ms-playwright \
     # Symlink the SDK's bundled `claude` binary into a stable PATH location
     # so the SDK's auto-resolver finds it regardless of cwd, AND so an agent
     # running inside the sandbox can invoke `claude` as a tool too.

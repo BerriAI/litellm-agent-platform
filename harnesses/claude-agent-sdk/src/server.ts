@@ -35,6 +35,10 @@ import {
   buildMemoryMcpServer,
   MEMORY_TOOL_NAMES,
 } from "./memory-tools.js";
+import {
+  buildScreenshotMcpServer,
+  SCREENSHOT_TOOL_NAMES,
+} from "./screenshot-tool.js";
 
 // SDK's auto-resolution of the Claude Code native binary fails when
 // `process.cwd()` differs from the SDK's install location (we run with
@@ -63,6 +67,7 @@ const CLAUDE_BIN = resolveClaudeBinary();
 // Returns null when LAP_BASE_URL/AGENT_ID/LAP_AUTH_TOKEN aren't all set, so
 // local dev without the platform reachable still works (tools just absent).
 const MEMORY_MCP = buildMemoryMcpServer();
+const SCREENSHOT_MCP = buildScreenshotMcpServer();
 
 // ---------------------------------------------------------------------------
 // Config
@@ -240,14 +245,14 @@ async function runTurn(
     // surfaces render answerable question cards.
     disallowedTools: ["AskUserQuestion"],
     ...(CLAUDE_BIN ? { pathToClaudeCodeExecutable: CLAUDE_BIN } : {}),
-    // Memory tools: only register when the in-process server was built (i.e.
-    // LAP env vars are set). Names are namespaced `mcp__<server>__<tool>`.
-    ...(MEMORY_MCP
-      ? {
-          mcpServers: { "lap-memory": MEMORY_MCP },
-          allowedTools: [...MEMORY_TOOL_NAMES],
-        }
-      : {}),
+    mcpServers: {
+      ...(MEMORY_MCP ? { "lap-memory": MEMORY_MCP } : {}),
+      "lap-screenshot": SCREENSHOT_MCP,
+    },
+    allowedTools: [
+      ...(MEMORY_MCP ? [...MEMORY_TOOL_NAMES] : []),
+      ...SCREENSHOT_TOOL_NAMES,
+    ],
     // Resume the SDK's persisted session if we have one — that's how the
     // SDK stitches turn N+1 onto turn N's history without us tracking it.
     ...(s.sdk_session_id ? { resume: s.sdk_session_id } : {}),
