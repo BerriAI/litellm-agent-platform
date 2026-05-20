@@ -38,6 +38,7 @@ import type {
 } from "../../core/types";
 import { fetchAttachments, type SlackFile } from "./files";
 import { resolveSlackUser } from "./users";
+import { fetchThreadHistory } from "./thread";
 
 const SIG_HEADER = "x-slack-signature";
 const TS_HEADER = "x-slack-request-timestamp";
@@ -178,11 +179,22 @@ export function buildWebhookAdapter(): WebhookAdapter {
       if (!channel || !teamId) return { kind: "ignore" };
 
       const text = stripMentions(e.text);
-      // Pull image bytes from Slack before handing the event to the
-      // dispatcher — the agent's sandbox can't authenticate against Slack's
-      // private file URLs, so the download has to happen here while we still
-      // hold the bot token.
-      const attachments = await fetchAttachments(e.files, install);
+
+      // Two independent Slack round trips — fetch them together so the webhook
+      // only pays for one. `fetchAttachments` pulls image bytes (the agent's
+      // sandbox can't authenticate against Slack's private file URLs).
+      // `fetchThreadHistory` backfills the earlier messages when the mention
+      // lands inside an existing thread, so the agent sees the context a human
+      // reading the thread would. A top-level mention starts a fresh thread
+      // (thread_ts === ts) and has nothing prior to fetch.
+      const threadTs =
+        e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null;
+      const [attachments, threadContext] = await Promise.all([
+        fetchAttachments(e.files, install),
+        threadTs
+          ? fetchThreadHistory(channel, threadTs, install, e.ts)
+          : Promise.resolve(null),
+      ]);
 
       // Ignore the event only when there's NEITHER text NOR attachments
       // (e.g. an empty @mention or a join notification). An image with no
@@ -214,6 +226,7 @@ export function buildWebhookAdapter(): WebhookAdapter {
         // than the thread root.
         original_ts: e.ts,
         sender,
+        thread_context: threadContext ?? undefined,
       };
     },
   };

@@ -10,7 +10,7 @@ export function buildScreenshotMcpServer(): McpSdkServerConfigWithInstance {
   const screenshotUrl = tool(
     "screenshot_url",
     "Capture a screenshot of any URL accessible in the sandbox (e.g. Jaeger UI at http://localhost:16686, LiteLLM proxy UI). Returns the screenshot as an image. Also saves PNG to /tmp/screenshots/ for committing to the repo as proof.",
-    z.object({
+    {
       url: z
         .string()
         .url()
@@ -22,7 +22,7 @@ export function buildScreenshotMcpServer(): McpSdkServerConfigWithInstance {
         .number()
         .optional()
         .describe("Extra ms to wait after page load, default 2000"),
-    }),
+    },
     async (input: { url: string; wait_ms?: number }) => {
       const { chromium } = await import("playwright");
       const browser = await chromium.launch({
@@ -42,11 +42,8 @@ export function buildScreenshotMcpServer(): McpSdkServerConfigWithInstance {
           content: [
             {
               type: "image" as const,
-              source: {
-                type: "base64" as const,
-                media_type: "image/png" as const,
-                data: buf.toString("base64"),
-              },
+              data: buf.toString("base64"),
+              mimeType: "image/png" as const,
             },
             {
               type: "text" as const,

@@ -4,6 +4,10 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
+# Session UI
+
+- **Do NOT render the raw SDK message stream in the session thread.** There must be no "Agent stream (SDK) … live" panel (`SdkStreamPanel`) in `src/app/sessions/[sid]/view.tsx`. It is visual spam — a duplicate live dump of frames the normal thread already renders. `useSdkMessageStream` stays, but only as a signal: its message count drives `refreshThread()` so external/webhook turns (Slack, etc.) paint without waiting for the poll. Never re-add the panel render.
+
 # Vault sidecar — key exposure rules
 
 Every sandbox pod runs a vault sidecar that MITMs all HTTPS egress via `HTTPS_PROXY`/`HTTP_PROXY=http://127.0.0.1:14322`. Understand the two paths before touching `buildContainerEnv` or `buildVaultEnv` in `src/server/k8s.ts`:

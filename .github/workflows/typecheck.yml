@@ -23,3 +23,31 @@ jobs:
       - run: npx prisma generate
 
       - run: npx tsc --noEmit
+
+  typecheck-harness:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The harness depends on the shared @lap/managed-tools package via a
+      # `file:../../managed-tools` reference whose `exports` resolve to compiled
+      # output (dist/). Build it first — same order as the harness Dockerfile —
+      # so `npm run build` below can resolve `@lap/managed-tools/memory`.
+      # Lockfiles for these packages are gitignored, so use `npm install`.
+      - name: Build managed-tools
+        working-directory: managed-tools
+        run: |
+          npm install --no-audit --no-fund --legacy-peer-deps
+          npx tsc
+
+      - name: Typecheck harness
+        working-directory: harnesses/claude-agent-sdk
+        run: |
+          npm install --no-audit --no-fund --legacy-peer-deps
+          npm run build

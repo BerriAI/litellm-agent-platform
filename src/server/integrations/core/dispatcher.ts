@@ -497,6 +497,15 @@ async function handleMessage(input: {
   // If spawn fails it has already forwarded an `error` event to the medium,
   // so we skip the "Setting up …" ack to avoid posting a contradictory
   // success message.
+  // First contact in a thread: fold the backfilled transcript into the initial
+  // prompt so the agent has the context the user is referring to. The reusable
+  // follow-up path above skips this — that session already carries its history.
+  const initialPrompt = event.thread_context
+    ? `You were added to an ongoing Slack thread. Here is the conversation so far:\n\n` +
+      `<thread>\n${event.thread_context}\n</thread>\n\n` +
+      `The message addressed to you:\n${event.prompt}`
+    : event.prompt;
+
   void (async () => {
     const spawned = await spawnSessionForEvent({
       integration,
@@ -505,7 +514,7 @@ async function handleMessage(input: {
       external_session_id: event.external_session_id,
       external_ref: event.external_ref ?? null,
       agent_id: binding.agent.agent_id,
-      prompt: event.prompt,
+      prompt: initialPrompt,
       attachments: event.attachments,
       sender: event.sender,
     });

@@ -57,11 +57,14 @@ const integration: Integration = {
         scopes: {
           bot: [
             "app_mentions:read",
+            "channels:history",
             "chat:write",
             "files:read",
+            "groups:history",
             "im:history",
             "im:read",
             "im:write",
+            "mpim:history",
             "reactions:write",
           ],
         },

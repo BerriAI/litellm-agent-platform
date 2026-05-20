@@ -40,7 +40,13 @@ export async function GET(req: Request, ctx: RouteContext) {
       });
       return Response.json(msgs);
     } catch (err) {
-      console.error("harness list_messages failed", err);
+      console.error("harness list_messages failed, falling back to history", err);
+      // Harness unreachable (pod recycled, dead session, local dev without
+      // a live sandbox). Return the last-known history snapshot so dead /
+      // expired sessions can still display their full thread in the UI.
+      if (Array.isArray(row.history) && row.history.length > 0) {
+        return Response.json(row.history);
+      }
       throw new HttpError(502, "harness request failed");
     }
   } catch (e) {

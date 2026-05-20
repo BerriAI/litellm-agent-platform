@@ -24,7 +24,7 @@ Copy `.env.example` to `.env` and fill in:
 |---|---|
 | `DATABASE_URL` | Neon direct (non-pooled) connection string |
 | `MASTER_KEY` | Bearer token for API auth — any string works locally |
-| `LITELLM_API_BASE` | LiteLLM gateway URL, e.g. `https://gateway.litellm-sandbox.ai/` |
+| `LITELLM_API_BASE` | LiteLLM gateway URL, e.g. `https://gateway.litellm.ai/` |
 | `LITELLM_API_KEY` | Key accepted by that gateway |
 | `ENCRYPTION_KEY` | AES-256 key for agent env var encryption (pull from EKS secret or generate) |
 | `LOCAL_SANDBOX_URL` | Set to `http://localhost:4096` to bypass K8s entirely |

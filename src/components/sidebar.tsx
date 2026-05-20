@@ -562,42 +562,44 @@ interface SectionHeaderProps {
 }
 
 function SectionHeader({ label, count, href, active, seeAllHref }: SectionHeaderProps) {
-  const inner = (
+  // Label + count. The "see all" link is rendered as a *sibling* of the
+  // header link below — never nested inside it — so we don't emit an <a>
+  // inside an <a> (invalid HTML, causes a hydration error).
+  const labelInner = (
     <>
       <span className="truncate">{label}</span>
       <span className="ml-auto tabular-nums text-muted-foreground/60">
         {count}
       </span>
-      {seeAllHref && (
-        <Link
-          href={seeAllHref}
-          onClick={(e) => e.stopPropagation()}
-          className="ml-1 text-muted-foreground/50 transition-colors hover:text-muted-foreground focus-visible:outline-none"
-        >
-          see all →
-        </Link>
-      )}
     </>
   );
   return (
-    <div className="mt-1 mb-1">
+    <div className="mt-1 mb-1 flex items-center gap-1">
       {href ? (
         <Link
           href={href}
           aria-current={active ? "page" : undefined}
           className={cn(
-            "flex h-6 items-center gap-2 rounded-md px-2 text-[10px] font-medium uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            "flex h-6 flex-1 items-center gap-2 rounded-md px-2 text-[10px] font-medium uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             active
               ? "bg-sidebar-accent text-foreground"
               : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
           )}
         >
-          {inner}
+          {labelInner}
         </Link>
       ) : (
-        <div className="flex h-6 items-center gap-2 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          {inner}
+        <div className="flex h-6 flex-1 items-center gap-2 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          {labelInner}
         </div>
+      )}
+      {seeAllHref && (
+        <Link
+          href={seeAllHref}
+          className="shrink-0 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50 transition-colors hover:text-muted-foreground focus-visible:outline-none"
+        >
+          see all →
+        </Link>
       )}
     </div>
   );

@@ -30,6 +30,7 @@ import {
   Globe,
   MessageSquare,
   ExternalLink,
+  Paperclip,
 } from "lucide-react";
 import {
   ApiError,
@@ -68,17 +69,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  SdkStreamPanel,
-  useSdkMessageStream,
-  type SdkStreamStatus,
-} from "./sdk-stream";
+import { useSdkMessageStream } from "./sdk-stream";
+import { foldSdkMessages } from "@/lib/fold-sdk-messages";
 import { TerminalPanel } from "./terminal-panel";
+import { SessionSidebar, extractLatestTasks } from "./session-sidebar";
 
 // Harnesses whose pod exposes a PTY (xterm.js attaches to it directly)
 // rather than the JSON message API. Add new TUI harness ids here.
 const TUI_HARNESS_IDS = new Set<string>(["claude-code", "codex"]);
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 type LocalRole = "user" | "assistant";
 
@@ -309,16 +307,48 @@ export default function SessionThreadView() {
     return "";
   }, [session, agent]);
 
-  // Subscribe to the session-wide SSE while the harness is up. The hook
-  // accumulates SDKMessage[] in local state but `SdkStreamPanel` is not
-  // rendered today — we use the array length only as a "new harness event"
-  // signal to drive `refreshThread()` below. This is what makes
-  // externally-triggered turns (Slack webhook → /message → harness bus)
-  // paint on the open tab without waiting for the 5s poll cycle.
+  // Subscribe to the session-wide SSE while the harness is up. The harness
+  // streams one `claude_sdk_message` per SDK message; we render those directly
+  // (see `liveTurns`) so externally-triggered turns (Slack @mention, Linear
+  // assign) stream in live. The stream is the single source of truth for any
+  // turn that arrives while the page is open — we never re-pull the whole
+  // session to render it.
   const sdkStreamEnabled = !!sessionId && session?.status === "ready";
-  const { messages: sdkMessages, status: sdkStreamStatus } =
-    useSdkMessageStream(sessionId, sdkStreamEnabled);
-  const lastSdkLenRef = useRef(0);
+  const { messages: sdkMessages } = useSdkMessageStream(
+    sessionId,
+    sdkStreamEnabled,
+  );
+
+  // The live turns, rendered directly from the SDK stream and appended to the
+  // thread as frames arrive. `foldSdkMessages` collapses partial stream_event
+  // frames into rolling assistant messages and splits a multi-step turn into
+  // one folded assistant message per segment — we render every assistant
+  // segment so steps accumulate instead of overwriting each other.
+  const liveTurns = useMemo<LocalMessage[]>(() => {
+    if (sdkMessages.length === 0) return [];
+    const folded = foldSdkMessages(sdkMessages);
+    const out: LocalMessage[] = [];
+    folded.forEach((f, i) => {
+      if (f.type !== "assistant") return;
+      const msg = (f as { message?: { id?: unknown; content?: unknown } })
+        .message;
+      // Each finished step yields TWO folded entries: the rolling copy built
+      // from stream_event deltas (flushed at message_stop, no `id`) and the
+      // harness's final complete assistant message (has `id`) — same content.
+      // Render the complete one; render a rolling one only when it's the last
+      // entry (the still-in-flight turn that has no complete copy yet).
+      const hasId = typeof msg?.id === "string";
+      if (!hasId && i !== folded.length - 1) return;
+      const content = (msg?.content ?? []) as Array<{
+        type: string;
+        [k: string]: unknown;
+      }>;
+      const parts = foldedAssistantToParts(content);
+      if (parts.length === 0) return;
+      out.push({ id: `__live_${i}`, role: "assistant", status: "completed", parts });
+    });
+    return out;
+  }, [sdkMessages]);
 
   // Pull the full opencode thread and replace local state. Source of truth
   // lives in the harness — POST /message only returns the final assistant
@@ -357,20 +387,6 @@ export default function SessionThreadView() {
       console.warn("listSessionMessages failed", e);
     }
   }, [sessionId]);
-
-  // Bridge: when the persistent SSE sees new harness frames, pull canonical
-  // messages so the existing renderer picks them up. We skip while a local
-  // UI-initiated stream is draining — that path writes token deltas straight
-  // into `messages`, and a mid-stream refresh would clobber them with the
-  // older harness-side snapshot.
-  useEffect(() => {
-    if (sdkMessages.length === lastSdkLenRef.current) return;
-    lastSdkLenRef.current = sdkMessages.length;
-    if (drainingRef.current) {
-      return;
-    }
-    void refreshThread();
-  }, [sdkMessages.length, refreshThread]);
 
   const loadSession = useCallback(async () => {
     if (!sessionId) return;
@@ -441,12 +457,8 @@ export default function SessionThreadView() {
         const s = await getSession(sessionId);
         if (cancelled) return;
         setSession(s);
-        // Also refresh messages so the thread catches up if the harness was
-        // still generating when the user navigated away and came back. The
-        // drain guard prevents clobbering an active local stream.
-        if (s.status === "ready" && !drainingRef.current) {
-          await refreshThread();
-        }
+        // Status only. The thread is driven by the SDK stream (live turns) and
+        // the one-time load on mount — we don't re-pull the whole session here.
       } catch {
         // silent
       }
@@ -456,7 +468,7 @@ export default function SessionThreadView() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [sessionId, refreshThread]);
+  }, [sessionId]);
 
   // First load on a session URL: jump straight to the latest turn so the
   // user lands at the live end of the conversation (matches Slack, iMessage,
@@ -731,6 +743,12 @@ export default function SessionThreadView() {
   // flex-child aside that shrinks the chat column).
   const [vaultOpen, setVaultOpen] = useState(false);
 
+  // Tasks panel is driven entirely by the agent's latest plan-tool call.
+  const sessionTasks = useMemo(
+    () => extractLatestTasks(messages.map((m) => m.parts)),
+    [messages],
+  );
+
   return (
     <div className="sessions-app flex w-full h-full bg-background text-foreground overflow-hidden">
       <MainPanel
@@ -738,8 +756,7 @@ export default function SessionThreadView() {
         agent={agent}
         agentName={currentAgentName}
         messages={messages}
-        sdkMessages={sdkMessages}
-        sdkStreamStatus={sdkStreamStatus}
+        liveTurns={liveTurns}
         loading={loading}
         error={error}
         setError={setError}
@@ -761,6 +778,7 @@ export default function SessionThreadView() {
         vaultOpen={vaultOpen}
         setVaultOpen={setVaultOpen}
       />
+      <SessionSidebar tasks={sessionTasks} />
       <VaultPanel
         open={vaultOpen}
         onClose={() => setVaultOpen(false)}
@@ -784,8 +802,7 @@ interface MainPanelProps {
   agent: AgentRow | null;
   agentName: string;
   messages: LocalMessage[];
-  sdkMessages: SDKMessage[];
-  sdkStreamStatus: SdkStreamStatus;
+  liveTurns: LocalMessage[];
   loading: boolean;
   error: string | null;
   setError: (s: string | null) => void;
@@ -813,8 +830,7 @@ function MainPanel({
   agent,
   agentName,
   messages,
-  sdkMessages,
-  sdkStreamStatus,
+  liveTurns,
   loading,
   error,
   setError,
@@ -941,7 +957,7 @@ function MainPanel({
               title="Open sandbox preview in new tab"
               className="inline-flex items-center gap-1.5 text-[12px] border border-border rounded px-2 py-1 text-muted-foreground hover:bg-muted transition-colors"
             >
-              <Globe className="w-3.5 h-3.5" />
+              <ExternalLink className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">View Preview</span>
             </a>
           )}
@@ -1121,18 +1137,6 @@ function MainPanel({
             </div>
           )}
 
-          {/*
-            Live SDKMessage stream from the harness's new
-            `claude_sdk_message` envelope. Shown only when no user-initiated
-            send is in flight (hasInProgress) — that path already streams
-            thinking via message.part.delta deltas into the legacy thread.
-            For external/webhook turns, this panel surfaces tool calls and
-            thinking live without waiting for refreshThread() to complete.
-          */}
-          {!hasInProgress && sdkStreamStatus === "streaming" && (
-            <SdkStreamPanel messages={sdkMessages} status={sdkStreamStatus} />
-          )}
-
           {messages.map((m, i) => (
             <MessageBlock
               key={m.id}
@@ -1143,6 +1147,21 @@ function MainPanel({
               }
             />
           ))}
+
+          {/*
+            Live turns streamed straight from the harness SDK bus (Slack /
+            webhook turns). Appended as frames arrive — each assistant segment
+            is its own block so steps accumulate instead of overwriting. Shown
+            only while awaiting a reply (last thread entry is the user) and no
+            local send is in flight; the local-send path renders its own
+            optimistic message.
+          */}
+          {!hasInProgress &&
+            (messages.length === 0 ||
+              messages[messages.length - 1].role === "user") &&
+            liveTurns.map((m) => (
+              <MessageBlock key={m.id} msg={m} isFirstUser={false} />
+            ))}
 
           {/*
             Vault interceptions live in the top-level Vault side panel —
@@ -1629,6 +1648,10 @@ function AssistantBlock({ msg }: { msg: LocalMessage }) {
     );
   });
 
+  const segments = segmentParts(visibleParts);
+  const lastToolSegIdx = lastToolSegmentIndex(segments);
+  const hasToolGroup = lastToolSegIdx !== -1;
+
   // Lets the assistant block grow to fit its content. The parent thread
   // container is the single scroll surface — see the matching change on
   // UserPromptBlock for why we dropped the per-bubble overflow-y-auto.
@@ -1662,18 +1685,134 @@ function AssistantBlock({ msg }: { msg: LocalMessage }) {
           </div>
         )
       ) : (
-        visibleParts.map((p, i) => (
-          <PartBlock key={i} part={p} />
-        ))
+        renderSegments(segments, lastToolSegIdx, inProgress ? undefined : msg.latency_ms)
       )}
 
       {failed && msg.error && (
         <div className="mono text-[11px] text-red-700">{msg.error}</div>
       )}
 
-      {!inProgress && !failed && typeof msg.latency_ms === "number" && (
+      {!inProgress && !failed && !hasToolGroup && typeof msg.latency_ms === "number" && (
         <div className="mono text-[11px] text-muted-foreground">
           {formatLatency(msg.latency_ms)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Adjacent tool parts collapse into a single "Worked for X · N tool calls"
+// bar instead of rendering one bordered box per call. Non-tool parts (text,
+// thinking, reasoning, image) render inline in order. The message latency is
+// folded into the *last* tool group's header so it reads as a work summary;
+// when a message has no tool calls the standalone latency footer is kept.
+type AssistantSegment =
+  | { kind: "part"; part: HarnessMessagePart }
+  | { kind: "tools"; parts: HarnessMessagePart[] };
+
+// Map a folded SDK assistant message's content blocks to the harness part
+// shape the thread already renders (text / thinking / tool). Lets the live
+// stream reuse AssistantBlock instead of a second renderer.
+function foldedAssistantToParts(
+  content: Array<{ type: string; [k: string]: unknown }>,
+): HarnessMessagePart[] {
+  const parts: HarnessMessagePart[] = [];
+  for (const b of content) {
+    // Partial-stream folds can leave sparse/holey content arrays — skip any
+    // slot that isn't a populated block before reading `.type`.
+    if (!b || typeof b !== "object") continue;
+    if (b.type === "text" && typeof b.text === "string" && b.text) {
+      parts.push({ type: "text", text: b.text });
+    } else if (
+      b.type === "thinking" &&
+      typeof b.thinking === "string" &&
+      b.thinking
+    ) {
+      parts.push({ type: "thinking", text: b.thinking });
+    } else if (b.type === "tool_use") {
+      parts.push({
+        type: "tool",
+        tool: typeof b.name === "string" ? b.name : "tool",
+        state: { status: "running", input: b.input ?? b.input_partial_json },
+      });
+    }
+  }
+  return parts;
+}
+
+function segmentParts(parts: HarnessMessagePart[]): AssistantSegment[] {
+  const segments: AssistantSegment[] = [];
+  for (const part of parts) {
+    const isTool = (typeof part?.type === "string" ? part.type : "") === "tool";
+    if (isTool) {
+      const last = segments[segments.length - 1];
+      if (last && last.kind === "tools") last.parts.push(part);
+      else segments.push({ kind: "tools", parts: [part] });
+    } else {
+      segments.push({ kind: "part", part });
+    }
+  }
+  return segments;
+}
+
+function lastToolSegmentIndex(segments: AssistantSegment[]): number {
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i].kind === "tools") return i;
+  }
+  return -1;
+}
+
+function renderSegments(
+  segments: AssistantSegment[],
+  lastToolSegIdx: number,
+  latencyMs?: number,
+): React.ReactNode {
+  return segments.map((seg, i) =>
+    seg.kind === "tools" ? (
+      <WorkBar
+        key={i}
+        parts={seg.parts}
+        durationMs={i === lastToolSegIdx ? latencyMs : undefined}
+      />
+    ) : (
+      <PartBlock key={i} part={seg.part} />
+    ),
+  );
+}
+
+function WorkBar({
+  parts,
+  durationMs,
+}: {
+  parts: HarnessMessagePart[];
+  durationMs?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const n = parts.length;
+  const calls = `${n} tool call${n === 1 ? "" : "s"}`;
+  const label =
+    typeof durationMs === "number"
+      ? `Worked for ${formatLatency(durationMs)} · ${calls}`
+      : calls;
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex w-fit items-center gap-2 rounded-full border border-border bg-muted/40 px-3 py-1 text-[12px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+      >
+        <ChevronDown
+          className={`w-3 h-3 transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        <Wrench className="w-3 h-3" />
+        <span>{label}</span>
+      </button>
+      {open && (
+        <div className="ml-1 flex flex-col gap-2 border-l-2 border-border/60 pl-3">
+          {parts.map((p, i) => (
+            <ToolBlock key={i} part={p} />
+          ))}
         </div>
       )}
     </div>
@@ -1911,6 +2050,8 @@ function Composer({
   handleSend,
   handleKeyDown,
 }: ComposerProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   // Submitting while a previous message is in flight is supported — the new
   // message lands in the FIFO queue and the drain effect picks it up. So the
   // textarea stays enabled and the send button is gated on a non-empty draft
@@ -2033,7 +2174,38 @@ function Composer({
             currentModel || "Enter to send · Shift+Enter for newline · paste images"
           )}
         </span>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            className="hidden"
+            onChange={async (e) => {
+              if (!e.target.files) return;
+              const files = Array.from(e.target.files);
+              e.target.value = "";
+              if (attachments.length + files.length > COMPOSER_ATTACHMENTS_MAX_COUNT) {
+                setError(`too many attachments (max ${COMPOSER_ATTACHMENTS_MAX_COUNT})`);
+                return;
+              }
+              for (const f of files) {
+                const err = await stageFile(f);
+                if (err) { setError(err); return; }
+              }
+              setError(null);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled || attachments.length >= COMPOSER_ATTACHMENTS_MAX_COUNT}
+            title="Attach image (PNG, JPEG, GIF, WebP — max 5 MB)"
+            className="p-1.5 rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            aria-label="Attach image"
+          >
+            <Paperclip className="w-3.5 h-3.5" />
+          </button>
           <button
             type="button"
             onClick={handleSend}
