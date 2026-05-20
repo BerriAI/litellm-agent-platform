@@ -105,6 +105,15 @@ export function AgentFormFields({
   const [loadingLibrary, setLoadingLibrary] = useState(false);
   const [skillDragOver, setSkillDragOver] = useState(false);
 
+  // Pre-load skill names when existing attachments are passed in (edit mode) so
+  // the chips render without requiring the user to open the picker first.
+  useEffect(() => {
+    if (pickedSkillIds.length > 0 && librarySkills.length === 0) {
+      listSkills().then(setLibrarySkills).catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedSkillIds.length]);
+
   function setEnvKey(idx: number, key: string) {
     onEnvVarsChange(envVars.map((p, i) => (i === idx ? [key, p[1]] : p)));
   }

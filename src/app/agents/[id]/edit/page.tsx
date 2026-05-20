@@ -14,7 +14,6 @@ interface PageProps {
 }
 
 const SKILL_MARKER_RE = /\n<!-- skill(?::[^\s>]+)? -->\n/;
-const SKILL_SUFFIX_RE = /(\n<!-- skill(?::[^\s>]+)? -->\n[\s\S]*)/;
 
 export default function EditAgentPage({ params }: PageProps) {
   const router = useRouter();
@@ -49,26 +48,27 @@ export default function EditAgentPage({ params }: PageProps) {
   const [mcpToolTotals, setMcpToolTotals] = useState<Map<string, number>>(new Map());
   const mcpTouched = useRef(false);
 
+  // Ref to original agent prompt, used to preserve inline (no-ID) skill blocks on save.
+  const originalPromptRef = useRef<string>("");
+
   useEffect(() => {
     getAgent(id)
       .then((a) => {
         setAgent(a);
+        originalPromptRef.current = a.prompt ?? "";
         setName(a.name ?? "");
         setPfpUrl(a.pfp_url ?? null);
         setHarnessId(a.harness_id);
         setModel(a.model ?? "");
         setBranchOverride(a.branch === "main" ? "" : (a.branch ?? ""));
-        // Strip skill markers — show only the base prompt for editing.
-        // Skill suffix is re-spliced at save time so attachments survive.
+        // Strip all skill markers — show only the base prompt for editing.
         const base = (a.prompt ?? "").split(SKILL_MARKER_RE)[0]?.trim() ?? "";
         setSystemPrompt(base);
         // Env vars
         const pairs = Object.entries(a.env_vars ?? {});
         setEnvVars(pairs.length > 0 ? pairs : [["", ""]]);
-        // Skills: attached_skill_ids are embedded in the prompt as markers.
-        // We start with no pickedSkillIds so existing skills stay intact via
-        // the skill suffix re-splice below. Users can add new ones.
-        setPickedSkillIds([]);
+        // Pre-populate existing library skill attachments so they're visible and detachable.
+        setPickedSkillIds(a.attached_skill_ids ?? []);
       })
       .catch((e) => setLoadError(e instanceof ApiError ? e.message : (e as Error).message))
       .finally(() => setLoading(false));
@@ -80,30 +80,40 @@ export default function EditAgentPage({ params }: PageProps) {
     setSaving(true);
     setSaveError(null);
     try {
-      // Save new inline skill to library if requested
+      // Save new inline skill to library if requested, surface failure as a warning.
       if (skillInstructions.trim() && skillSaveToLibrary && skillName.trim()) {
-        createSkill({
-          name: skillName.trim(),
-          description: skillDesc.trim() || undefined,
-          content: skillInstructions.trim(),
-        }).catch(() => {});
+        try {
+          await createSkill({
+            name: skillName.trim(),
+            description: skillDesc.trim() || undefined,
+            content: skillInstructions.trim(),
+          });
+        } catch (skillErr) {
+          // Skill library save failed — agent will still save, but warn the user.
+          setSaveError(
+            `Warning: agent saved but skill library save failed: ${skillErr instanceof ApiError ? skillErr.message : (skillErr as Error).message}`,
+          );
+        }
       }
 
-      // Build final prompt: base + existing skill suffix + new inline skill + new picked skills
-      const existingSkillSuffix = (agent.prompt ?? "").match(SKILL_SUFFIX_RE)?.[1] ?? "";
+      // Build final prompt:
+      // 1. Base system prompt (user-edited)
+      // 2. Currently-picked library skills (user can add/remove via UI)
+      // 3. Existing inline (no-ID) skill blocks from the original prompt — preserved as-is
+      // 4. Newly-written inline skill from this session (if any)
+      const existingInlineMatch = originalPromptRef.current.match(/\n<!-- skill -->\n[\s\S]*/);
+      const existingInlineBlock = existingInlineMatch ? existingInlineMatch[0] : "";
+
       let finalPrompt = systemPrompt.trim();
 
-      // Re-attach existing skill blocks (preserves current library skill attachments)
-      if (existingSkillSuffix) {
-        finalPrompt = finalPrompt ? finalPrompt + existingSkillSuffix : existingSkillSuffix.trimStart();
-      }
-
-      // Append newly-picked library skills
       for (const skillId of pickedSkillIds) {
         finalPrompt += `\n<!-- skill:${skillId} -->\n`;
       }
 
-      // Append newly-written inline skill
+      if (existingInlineBlock) {
+        finalPrompt += existingInlineBlock;
+      }
+
       if (skillInstructions.trim()) {
         finalPrompt = finalPrompt
           ? `${finalPrompt}\n<!-- skill -->\n${skillInstructions.trim()}`
@@ -138,7 +148,9 @@ export default function EditAgentPage({ params }: PageProps) {
         name: name.trim() || undefined,
         pfp_url: pfpUrl ?? "",
         model: model.trim() || undefined,
-        branch: branchOverride.trim() || undefined,
+        // Send explicit value (empty string = reset to default "main") so clearing
+        // the branch field actually removes any override rather than being a no-op.
+        branch: branchOverride.trim() || "main",
         prompt: finalPrompt,
         env_vars: envVarsRecord,
         ...(mcpTouched.current && { mcp_servers: mcpServers, mcp_allowed_tools: mcpAllowedTools }),
