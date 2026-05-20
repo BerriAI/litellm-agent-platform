@@ -23,6 +23,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PfpUpload } from "@/components/pfp-upload";
 import { CallAgentSnippets } from "@/components/call-agent-snippets";
 import { EnvVarsEditor } from "@/components/env-vars-editor";
+import { AgentAsToolPicker, type AgentToolSpec } from "@/components/agent-as-tool-picker";
 import {
   AgentRow,
   ApiError,
@@ -96,6 +97,8 @@ export default function AgentDetailPage({ params }: PageProps) {
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteInProgress, setDeleteInProgress] = useState(false);
+
+  const [agentToolsSaving, setAgentToolsSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -174,6 +177,23 @@ export default function AgentDetailPage({ params }: PageProps) {
       setError(null);
       const updated = await updateAgent(agent.id, { env_vars: next });
       setAgent(updated);
+    },
+    [agent],
+  );
+
+  const handleAgentToolsSave = useCallback(
+    async (tools: AgentToolSpec[]) => {
+      if (!agent) return;
+      setError(null);
+      setAgentToolsSaving(true);
+      try {
+        const updated = await updateAgent(agent.id, { agent_tools: tools });
+        setAgent(updated);
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : (e as Error).message);
+      } finally {
+        setAgentToolsSaving(false);
+      }
     },
     [agent],
   );
@@ -447,6 +467,20 @@ export default function AgentDetailPage({ params }: PageProps) {
                   value={agent.env_vars}
                   onSave={handleEnvVarsSave}
                   onError={(msg) => setError(msg)}
+                />
+              </dd>
+
+              <dt className="text-muted-foreground">Sub-agent tools</dt>
+              <dd className="min-w-0">
+                <AgentAsToolPicker
+                  self_agent_id={agent.id}
+                  value={agent.agent_tools ?? []}
+                  disabled={agentToolsSaving}
+                  onChange={(tools) => {
+                    // Optimistic update
+                    setAgent({ ...agent, agent_tools: tools });
+                    void handleAgentToolsSave(tools);
+                  }}
                 />
               </dd>
 

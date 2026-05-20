@@ -47,7 +47,7 @@ const REFRESH_TOKEN_TTL_SEC = 24 * 60 * 60;
 // extend the JWT path to other route classes; keeping this a string-array
 // so the call site reads naturally (`scope: ["memory"]`) and so we don't
 // have to migrate token payloads when we add the second one.
-export type AgentScope = "memory";
+export type AgentScope = "memory" | "tool";
 
 interface BaseClaims {
   /** "access" — a regular bearer that authorizes requests under `scope`. */

@@ -42,6 +42,13 @@ model Agent {
    * compliance) may want a larger preload window than the default 10.
    */
   preload_memory_limit Int     @default(10)
+  /**
+   * Sub-agents wired as callable tools. Stored as a JSON array of
+   * { agent_id, name, description } objects. The harness entrypoint receives
+   * AGENT_TOOLS_JSON and registers each entry as a first-class tool so the
+   * model can delegate to a specialised agent mid-run.
+   */
+  agent_tools          Json     @default("[]")
   created_at          DateTime @default(now())
   created_by          String?
 

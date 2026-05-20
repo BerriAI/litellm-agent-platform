@@ -51,6 +51,9 @@ export const PATCH = wrap<RouteContext>(async (req, ctx) => {
   if (body.preload_memory_limit !== undefined) {
     data.preload_memory_limit = body.preload_memory_limit;
   }
+  if (body.agent_tools !== undefined) {
+    data.agent_tools = body.agent_tools as unknown as Prisma.InputJsonValue;
+  }
 
   const existing = await prisma.agent.findUnique({ where: { agent_id } });
   if (existing === null) httpError(404, `agent '${agent_id}' not found`);

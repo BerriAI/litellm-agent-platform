@@ -378,6 +378,13 @@ async function buildContainerEnv(
     LITELLM_DEFAULT_MODEL: agent.model,
     AGENT_PROMPT: fullPrompt,
     SKILLS_JSON: skillsJson,
+    // Sub-agents wired as callable tools. Non-empty JSON array injected only
+    // when agent_tools is configured — empty string means "no tools" to keep
+    // harness boot logic simple (check truthiness before parsing).
+    AGENT_TOOLS_JSON:
+      Array.isArray(agent.agent_tools) && agent.agent_tools.length > 0
+        ? JSON.stringify(agent.agent_tools)
+        : "",
     PORT: String(agent.container_port),
     // For the harness's memory tools — empty LAP_BASE_URL makes the
     // tools no-op gracefully (the harness checks before registering them).

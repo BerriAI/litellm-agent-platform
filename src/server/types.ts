@@ -97,6 +97,29 @@ export interface SandboxFileSpec {
   size: number;
 }
 
+/**
+ * One sub-agent wired as a callable tool on an orchestrator agent.
+ * The harness receives AGENT_TOOLS_JSON and registers each entry so the
+ * model can invoke a specialised worker mid-run.
+ */
+export interface AgentToolSpec {
+  agent_id: string;
+  /** Tool name exposed to the model (e.g. "research_agent"). */
+  name: string;
+  /** Short description the model sees in its tool manifest. */
+  description: string;
+}
+
+const AgentToolSpecSchema = z.object({
+  agent_id: z.string().uuid(),
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9_-]+$/, "name must be alphanumeric + underscores/hyphens"),
+  description: z.string().min(1).max(256),
+});
+
 const SandboxFileSpecSchema = z.object({
   name: z.string().min(1),
   sandbox_path: z.string().min(1).regex(/^[~/]/, "sandbox_path must start with / or ~"),
@@ -129,6 +152,15 @@ export const CreateAgentBody = z.object({
   mcp_servers: z.array(z.string()).default([]),
   allow_out: z.array(z.string()).default([]),
   deny_out: z.array(z.string()).default([]),
+  /**
+   * Sub-agents wired as callable tools. Max 10 entries.
+   * Each { agent_id, name, description } entry is injected as AGENT_TOOLS_JSON
+   * so the harness can register them as first-class tools.
+   */
+  agent_tools: z
+    .array(AgentToolSpecSchema)
+    .max(10, "agent_tools: max 10 sub-agent tools")
+    .default([]),
   sandbox_files: z
     .array(SandboxFileSpecSchema)
     .max(SANDBOX_FILES_MAX_COUNT, `sandbox_files: max ${SANDBOX_FILES_MAX_COUNT} files`)
@@ -184,6 +216,8 @@ export const UpdateAgentBody = z.object({
    * here so a runaway value can't blow up the prompt.
    */
   preload_memory_limit: z.number().int().min(0).max(50).optional(),
+  /** Replace the agent's sub-agent tools list. */
+  agent_tools: z.array(AgentToolSpecSchema).max(10, "agent_tools: max 10 sub-agent tools").optional(),
   /**
    * Replace the agent's env_vars map. Same constraints as the CreateAgentBody
    * version: max keys, max byte size, reserved keys blocked. The PATCH route
@@ -400,6 +434,8 @@ export interface ApiAgent {
    * by MAX_PINNED_PRELOAD. Editable per-agent on /agents/:id/memory.
    */
   preload_memory_limit: number;
+  /** Sub-agents wired as callable tools. */
+  agent_tools: AgentToolSpec[];
   created_at: string;
 }
 
@@ -819,6 +855,9 @@ export function toApiAgent(row: AgentRow): ApiAgent {
       ? ((row as Record<string, unknown>).sandbox_files as SandboxFileSpec[])
       : [],
     preload_memory_limit: row.preload_memory_limit,
+    agent_tools: Array.isArray((row as Record<string, unknown>).agent_tools)
+      ? ((row as Record<string, unknown>).agent_tools as AgentToolSpec[])
+      : [],
     created_at: row.created_at.toISOString(),
   };
 }
