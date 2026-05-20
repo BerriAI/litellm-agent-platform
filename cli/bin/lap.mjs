@@ -554,8 +554,10 @@ function startSpinner() {
   const timer = setInterval(() => {
     const elapsed = Math.floor((Date.now() - start) / 1000);
     const verb    = verbs[Math.floor(elapsed / 4) % verbs.length];
+    readline.clearLine(process.stdout, 0);
+    readline.cursorTo(process.stdout, 0);
     process.stdout.write(
-      `  ${orange(frames[fi % frames.length])} ${orange(verb + "…")} ${ansi.dim(`(${elapsed}s)`)}\r`
+      `  ${orange(frames[fi % frames.length])} ${orange(verb + "…")} ${ansi.dim(`(${elapsed}s)`)}`
     );
     fi++;
   }, 80);
