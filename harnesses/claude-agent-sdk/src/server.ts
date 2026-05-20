@@ -444,7 +444,7 @@ function handleSdkEvent(
         // The SDK doesn't always re-aggregate streaming thinking_delta events
         // into the final assistant message — fall back to what we accumulated
         // from the stream so the history entry has the full reasoning text.
-        const thinkingKey = sdkMsgId ? `${sdkMsgId}:${idx}` : `_:${idx}`;
+        const thinkingKey = `${sdkMsgId}:${idx}`;
         const streamAccum = turn.thinkingAccum.get(thinkingKey) ?? "";
         const part: PlatformPart = {
           id: partId,
@@ -555,16 +555,11 @@ function handleSdkEvent(
         inner.delta?.type === "thinking_delta" &&
         typeof inner.delta.thinking === "string"
       ) {
-        // Token-level thinking stream when the model emits it. Haiku tends
-        // to bundle thinking (no thinking_delta); sonnet/opus stream it.
-        // Accumulate into thinkingAccum so the final assistant event can
-        // fall back to this text if block.thinking arrives empty.
-        // Key by "${sdkMsgId}:${blockIndex}" — not globalIdx — so the
-        // assistant event lookup succeeds even when blockIdxsBySdkMsgId
-        // misses (e.g. message_start had no id) and fresh globalIdxs differ.
-        const thinkingKey = turn.currentSdkMsgId
-          ? `${turn.currentSdkMsgId}:${inner.index}`
-          : `_:${inner.index}`;
+        // Token-level thinking stream. Accumulate into thinkingAccum so the
+        // final assistant event can fall back to this text if block.thinking
+        // arrives empty. Key by "${sdkMsgId}:${blockIndex}" so the lookup in
+        // the assistant event handler matches the same slot.
+        const thinkingKey = `${turn.currentSdkMsgId}:${inner.index}`;
         const prev = turn.thinkingAccum.get(thinkingKey) ?? "";
         turn.thinkingAccum.set(thinkingKey, prev + inner.delta.thinking);
         emit(s, "message.part.delta", {
