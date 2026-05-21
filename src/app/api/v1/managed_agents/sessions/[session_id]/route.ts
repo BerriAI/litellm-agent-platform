@@ -108,6 +108,25 @@ export async function DELETE(req: Request, ctx: RouteContext) {
     // dead state instead of forwarding to a torn-down sandbox.
     invalidateSession(session_id);
 
+    // For brain-inline sessions, the harness session lives on the shared
+    // harness server's in-process Map and must be explicitly deleted, otherwise
+    // every deleted session permanently orphans a harness session (unbounded
+    // memory growth in the shared harness process).
+    if (
+      row.agent.harness_id === HARNESS_BRAIN_INLINE &&
+      row.harness_session_id &&
+      row.sandbox_url
+    ) {
+      void harnessDeleteSession({
+        sandbox_url: row.sandbox_url,
+        harness_session_id: row.harness_session_id,
+      }).catch((err) =>
+        console.warn(
+          `harnessDeleteSession failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
+
     return Response.json({ id: session_id, status: "deleted" });
   } catch (e) {
     if (e instanceof Response) return e;
