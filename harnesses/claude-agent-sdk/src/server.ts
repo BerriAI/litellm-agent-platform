@@ -261,7 +261,8 @@ async function runTurn(
   // `message.updated` only carries `info` — emit each user part too so the
   // event-driven UI renders the prompt text live (opencode does the same).
   // Without this the live user bubble is empty until a history re-seed.
-  for (const part of userParts) {
+  for (let i = 0; i < userParts.length; i++) {
+    const part = { ...userParts[i], id: `${userMessage.info.id}_p${i}`, messageID: userMessage.info.id };
     emit(s, "message.part.updated", { messageID: userMessage.info.id, part });
   }
 

@@ -13,11 +13,12 @@ import { ZodError } from "zod";
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { harnessDeleteSession } from "@/server/harness";
 import { buildSessionOrigin } from "@/server/integrations/core/origin";
 import { stopTask } from "@/server/k8s";
 import { invalidateSession } from "@/server/sessionCache";
 import { clearSandboxes } from "@/server/tools/sandboxTools";
-import { HttpError, httpError, toApiSession } from "@/server/types";
+import { HARNESS_BRAIN_INLINE, HttpError, httpError, toApiSession } from "@/server/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,6 +93,16 @@ export async function DELETE(req: Request, ctx: RouteContext) {
     // Release any in-process sandboxMap entries for brain-inline sessions so
     // they don't accumulate as a memory leak across many session cycles.
     clearSandboxes(session_id);
+
+    // For brain-inline sessions, also delete the harness session from the
+    // shared harness server's in-memory map to prevent unbounded accumulation.
+    // Fire-and-forget: failure here is non-fatal (harness restarts clear state).
+    if (row.agent.harness_id === HARNESS_BRAIN_INLINE && row.harness_session_id && row.sandbox_url) {
+      void harnessDeleteSession({ sandbox_url: row.sandbox_url, harness_session_id: row.harness_session_id })
+        .catch((err: unknown) => {
+          console.warn(`session DELETE: failed to delete harness session ${row.harness_session_id}:`, err);
+        });
+    }
 
     // Drop the hot-path cache entry so the next message attempt observes the
     // dead state instead of forwarding to a torn-down sandbox.

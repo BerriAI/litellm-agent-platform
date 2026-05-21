@@ -31,6 +31,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { foldSdkMessages, type FoldedMessage } from "@/lib/fold-sdk-messages";
+import { ensureUiCookie } from "@/lib/ui-cookie";
 
 export type SdkStreamStatus =
   | "idle" // not connected (e.g. session not ready yet)
@@ -202,39 +203,6 @@ export function useSdkMessageStream(
   }, [sessionId, enabled]);
 
   return { messages, status, isRestored };
-}
-
-let _uiCookiePromise: Promise<boolean> | null = null;
-
-/**
- * POSTs the bearer master key (from localStorage) to /api/ui/auth/cookie so
- * the HttpOnly cookie that gates /api/ui/sessions/:id/stream is in place
- * before we open the EventSource. Resolves true on success, false on auth
- * failure or network error. Cached per-page so multiple subscribers share
- * one install.
- */
-function ensureUiCookie(): Promise<boolean> {
-  if (_uiCookiePromise) return _uiCookiePromise;
-  _uiCookiePromise = (async () => {
-    if (typeof window === "undefined") return false;
-    let key: string | null = null;
-    try {
-      key = window.localStorage.getItem("ui_master_key");
-    } catch {
-      return false;
-    }
-    if (!key) return false;
-    try {
-      const res = await fetch("/api/ui/auth/cookie", {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}` },
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  })();
-  return _uiCookiePromise;
 }
 
 // =====================================================================

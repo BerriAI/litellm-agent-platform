@@ -12,6 +12,7 @@ import {
   type PermissionRequest,
 } from "@/lib/agent-state";
 import { browserOpencodeClient } from "@/lib/opencode-client";
+import { ensureUiCookie } from "@/lib/ui-cookie";
 
 export type SendParts = Array<
   { type: "text"; text: string } | { type: "file"; mime: string; url: string }
@@ -84,10 +85,17 @@ export function useOpencodeThread(
     fetchedRef.current = new Set();
     let cancelled = false;
     const ctl = new AbortController();
-    const oc = browserOpencodeClient(sessionId);
-    ocRef.current = oc;
 
     void (async () => {
+      // Install the HttpOnly UI cookie before any /api/ui/* request so that
+      // prompt_async, event subscription, and history fetches all succeed.
+      // ensureUiCookie is cached per page-load — only one POST per session.
+      await ensureUiCookie();
+      if (cancelled) return;
+
+      const oc = browserOpencodeClient(sessionId);
+      ocRef.current = oc;
+
       try {
         const hist = await oc.session.messages({
           path: { id: harnessSessionId },
