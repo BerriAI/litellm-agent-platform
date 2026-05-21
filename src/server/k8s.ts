@@ -1321,9 +1321,10 @@ export async function getInlineHarnessStatus(): Promise<{
       readyReplicas: dep.status?.readyReplicas ?? 0,
       url,
     };
-  } catch (err) {
-    if (isNotFound(err)) return { exists: false, readyReplicas: 0, url };
-    throw err;
+  } catch {
+    // 404 = not deployed; any other error (e.g. k8s unreachable in local dev)
+    // also reports stopped so the UI card still renders.
+    return { exists: false, readyReplicas: 0, url };
   }
 }
 
