@@ -590,6 +590,33 @@ function extractReplText(data) {
   return JSON.stringify(data, null, 2);
 }
 
+// Animated spinner shown while the agent turn is in-flight.
+// Returns a stop() function that clears the line and returns elapsed seconds.
+function startSpinner() {
+  const verbs = ["Thinking","Running","Churning","Working","Percolating"];
+  const start = Date.now();
+  let dots = 0;
+  // Write a blank line that the spinner will own — readline already moved to a
+  // new line after Enter, so we take the next line and hold it.
+  process.stdout.write("\n");
+  const timer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - start) / 1000);
+    const verb    = verbs[Math.floor(elapsed / 4) % verbs.length];
+    const trail   = ".".repeat((dots % 3) + 1).padEnd(3, " ");
+    // \x1b[1A = up 1 line  \x1b[2K = erase entire line  \r = col 0
+    process.stdout.write(`\x1b[1A\x1b[2K\r  * ${verb}${trail}(${elapsed}s)\n`);
+    dots++;
+  }, 300);
+  return {
+    stop() {
+      clearInterval(timer);
+      // Erase the spinner line and leave cursor at col 0 on that line
+      process.stdout.write(`\x1b[1A\x1b[2K\r`);
+      return Math.round((Date.now() - start) / 1000);
+    },
+  };
+}
+
 // REPL mode for JSON-API harnesses (claude-agent-sdk, opencode).
 // Sends each line through LAP's opencode proxy
 // (POST /sessions/:id/opencode/session/:ocid/message) and prints the reply.
@@ -627,7 +654,7 @@ function attachRepl(cfg, sid) {
       if (busy) return; // drop input while request is in-flight
       busy = true;
       (async () => {
-        process.stdout.write(`  ${ansi.dim("…")}\r`);
+        const spinner = startSpinner();
         try {
           const id = await resolveOcid();
           const r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions/${sid}/opencode/session/${id}/message`, {
@@ -638,18 +665,24 @@ function attachRepl(cfg, sid) {
             },
             body: JSON.stringify({ parts: [{ type: "text", text }] }),
           });
-          readline.clearLine(process.stdout, 0);
-          readline.cursorTo(process.stdout, 0);
+          const elapsed = spinner.stop();
           if (!r.ok) {
             const body = await r.text().catch(() => "");
             console.error(`  ${ansi.red(`✗ ${r.status} ${r.statusText} ${body.slice(0, 120)}`)}`);
           } else {
             const data = await r.json().catch(() => null);
+            const tokens = data?.info?.tokens;
+            const cost   = data?.info?.cost;
+            const meta   = [
+              `${elapsed}s`,
+              tokens?.output != null ? `↓ ${tokens.output} tokens` : null,
+              cost != null ? `$${cost.toFixed(4)}` : null,
+            ].filter(Boolean).join(" · ");
             console.log("\n" + renderMarkdown(extractReplText(data)) + "\n");
+            process.stdout.write(`  ${ansi.dim(meta)}\n\n`);
           }
         } catch (e) {
-          readline.clearLine(process.stdout, 0);
-          readline.cursorTo(process.stdout, 0);
+          spinner.stop();
           console.error(`  ${ansi.red(`✗ ${e.message}`)}`);
         }
         busy = false;
