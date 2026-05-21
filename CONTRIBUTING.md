@@ -125,26 +125,46 @@ The `WARM_POOL_SIZE=0` setting prevents the background reconciler from trying to
 
 ## Testing the brain-inline harness locally
 
-`brain-inline` is a harness mode where the Claude loop runs inside the Next.js platform process instead of inside a remote harness container. The sandbox is a lightweight command executor — it receives shell commands from the platform and returns stdout. Because there is no pod to spin up, sessions reach `ready` in under 200ms.
+`claude-code-brain-inline` is a harness mode where the claude-agent-sdk harness runs in "sandbox mode" — built-in file/bash tools are blocked, and `provision`/`execute` MCP tools are exposed instead. Sessions reach `ready` in under 500ms because no pod is provisioned.
 
-### Start the executor
+### How it works
 
-Instead of the full `claude-agent-sdk` harness, start the executor:
+At Next.js startup, `instrumentation.ts` auto-spawns `harnesses/claude-agent-sdk/dist/server.js` on a random free port and writes the URL into `process.env.CLAUDE_CODE_INLINE_URL`. Session creates for `claude-code-brain-inline` agents route to that shared harness server — no manual harness start, no `LOCAL_SANDBOX_URL` needed.
+
+The harness's `provision`/`execute` MCP tools call back to the platform at `LAP_BASE_URL`. Without `LAP_BASE_URL` + `LAP_AUTH_TOKEN`, those tools are silently absent and the agent runs text-only.
+
+### Step 1: Build the harness
+
+The harness must be built before `npm run dev` — instrumentation.ts spawns the compiled output:
 
 ```bash
-cd harnesses/executor
-npm install && npm run build
-REPO_DIR=/path/to/your/local/repo node dist/server.js
-# executor harness listening on http://0.0.0.0:4096
+cd harnesses/claude-agent-sdk && npm install && npm run build && cd ../..
 ```
 
-`REPO_DIR` must be a real directory on your machine — shell commands execute there.
+### Step 2: Add to .env
 
-### .env is the same
+```dotenv
+# Harness calls back here for provision/execute tools.
+# Without these, sandbox tools are unavailable (text-only still works).
+LAP_BASE_URL=http://localhost:3000
+LAP_AUTH_TOKEN=sk-local-dev   # same value as MASTER_KEY
+```
 
-No `.env` changes are needed beyond what is already described above. `LOCAL_SANDBOX_URL=http://localhost:4096` continues to point at whatever is listening on that port — now the executor instead of the full harness.
+Leave `CLAUDE_CODE_INLINE_URL` **unset** — instrumentation.ts sets it automatically.
 
-### Create a brain-inline agent and test
+### Step 3: Start the platform
+
+```bash
+npm run dev
+```
+
+Expected startup output:
+```
+[harness] claude-agent-sdk harness listening on http://0.0.0.0:XXXXX
+[inline-harness] ready at http://127.0.0.1:XXXXX
+```
+
+### Step 4: Create a brain-inline agent and test
 
 ```bash
 BASE=http://localhost:3000
@@ -153,23 +173,23 @@ KEY=sk-local-dev
 AGENT_ID=$(curl -sS $BASE/api/v1/managed_agents/agents \
   -H "authorization: Bearer $KEY" \
   -H "content-type: application/json" \
-  -d '{"name":"brain-test","harness_id":"brain-inline","model":"anthropic/claude-haiku-4-5","prompt":"You are a helpful assistant. When you need to run code, use the provision and execute tools."}' \
+  -d '{"name":"brain-test","harness_id":"claude-code-brain-inline","model":"anthropic/claude-haiku-4-5","prompt":"You are a helpful assistant."}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
-# Session is ready immediately — no pod spinup
+# Session is ready in <500ms — no pod spinup
 SID=$(curl -sS $BASE/api/v1/managed_agents/agents/$AGENT_ID/session \
   -H "authorization: Bearer $KEY" \
   -H "content-type: application/json" \
   -d '{"title":"test"}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
-# Text-only — no executor call, ~2s response
+# Text-only — ~2s response
 curl -sS $BASE/api/v1/managed_agents/sessions/$SID/message \
   -H "authorization: Bearer $KEY" \
   -H "content-type: application/json" \
   -d '{"text":"What is 2+2?"}'
 
-# Tool use — Claude calls provision then execute
+# Tool use — Claude calls provision then execute (requires LAP_BASE_URL + LAP_AUTH_TOKEN)
 curl -sS $BASE/api/v1/managed_agents/sessions/$SID/message \
   -H "authorization: Bearer $KEY" \
   -H "content-type: application/json" \
@@ -180,13 +200,14 @@ curl -sS $BASE/api/v1/managed_agents/sessions/$SID/message \
 
 | Check | Expected |
 |---|---|
-| Session create latency | Returns in <200ms |
+| Session create latency | Returns in <500ms |
+| Startup logs | `[inline-harness] ready at http://127.0.0.1:XXXXX` |
 | Text-only message | `task_arn` stays `null` on the session row |
-| Tool-use message | Executor receives `POST /execute`; Claude gets stdout back in the thread |
+| Tool-use message | Platform receives `POST /sandbox/execute`; Claude gets stdout back in the thread |
 
 ### Difference from `claude-agent-sdk` local dev
 
-With `claude-agent-sdk`, the full Claude loop runs inside the harness process at `localhost:4096` — the platform only forwards the message and streams events back. With `brain-inline`, the Claude loop runs inside the Next.js platform process itself. The executor at `localhost:4096` is a dumb command runner: it only receives `POST /execute` requests and returns shell output. No Claude SDK, no agent loop, no SSE event stream lives at that port.
+With `claude-agent-sdk`, the full Claude loop runs inside a remote harness process (or the local harness at `LOCAL_SANDBOX_URL`) — the platform only forwards the message and streams events back. With `claude-code-brain-inline`, the same claude-agent-sdk harness runs in sandbox mode: built-in file/bash tools are disabled, and `provision`/`execute` MCP tools replace them with platform-mediated K8s pod provisioning. The harness process is shared across all brain-inline sessions (auto-spawned by the platform at startup).
 
 ## Common issues
 
