@@ -820,6 +820,18 @@ app.post("/session/:id/abort", async (c) => {
   return c.json({ ok: true });
 });
 
+app.delete("/session/:id", async (c) => {
+  const id = c.req.param("id");
+  const s = getSession(id);
+  if (!s) return c.json({ error: "not found" }, 404);
+  // Abort any in-flight turn before dropping the session entry.
+  if (s.abortController) {
+    s.abortController.abort();
+  }
+  sessions.delete(id);
+  return c.json({ ok: true });
+});
+
 /**
  * SSE bus. The platform's streaming route subscribes here, filters by
  * `properties.sessionID === harness_session_id`, and forwards each event

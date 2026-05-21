@@ -279,6 +279,29 @@ export async function harnessPromptAsync(
  * canceling via the signal when done — without that, the stream stays open
  * (10s heartbeats keep undici from idling it shut).
  */
+/**
+ * DELETE /session/:id — remove the session from the harness's in-memory map.
+ * Used by brain-inline restart to prevent orphaned session accumulation. Fire
+ * and forget: if the harness is unreachable the old session will simply idle
+ * until the harness process restarts, which is preferable to blocking the new
+ * restart on cleanup.
+ */
+export async function harnessDeleteSession(opts: {
+  sandbox_url: string;
+  harness_session_id: string;
+}): Promise<void> {
+  const { sandbox_url, harness_session_id } = opts;
+  const url = `${sandbox_url}/session/${harness_session_id}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text().catch(() => "");
+    throw new HarnessHttpError(res.status, res.statusText, text, url, "DELETE");
+  }
+}
+
 export async function harnessAbort(opts: {
   sandbox_url: string;
   harness_session_id: string;

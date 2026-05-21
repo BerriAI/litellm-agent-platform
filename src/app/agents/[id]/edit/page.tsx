@@ -84,6 +84,15 @@ export default function EditAgentPage({ params }: PageProps) {
         setEnvVars(pairs.length > 0 ? pairs : [["", ""]]);
         // Pre-populate existing library skill attachments so they're visible and detachable.
         setPickedSkillIds(a.attached_skill_ids ?? []);
+        // Pre-populate projects from agent data so editing doesn't wipe them on save.
+        if (Array.isArray(a.projects) && a.projects.length > 0) {
+          setSelectedProjects(a.projects.map((p) => ({
+            id: p.id,
+            name: p.name,
+            description: p.description ?? "",
+            repo_url: p.repo_url,
+          })));
+        }
       })
       .catch((e) => setLoadError(e instanceof ApiError ? e.message : (e as Error).message))
       .finally(() => setLoading(false));

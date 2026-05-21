@@ -41,6 +41,7 @@ import {
   expandMessage,
   formatHistoryAsText,
   harnessCreateSession,
+  harnessDeleteSession,
   harnessSendMessage,
 } from "@/server/harness";
 import {
@@ -96,6 +97,16 @@ export async function POST(req: Request, ctx: RouteContext) {
           data: { status: "failed", failure_reason: "CLAUDE_CODE_INLINE_URL not configured" },
         });
         return Response.json({ error: "CLAUDE_CODE_INLINE_URL not configured" }, { status: 503 });
+      }
+
+      // Best-effort cleanup: delete the old harness session before creating a
+      // fresh one so sessions don't accumulate in the shared harness process
+      // across many restart cycles.
+      if (row.harness_session_id) {
+        await harnessDeleteSession({ sandbox_url: inlineUrl, harness_session_id: row.harness_session_id })
+          .catch((err: unknown) => {
+            console.warn(`brain-inline restart: failed to delete old harness session ${row.harness_session_id}:`, err);
+          });
       }
 
       const rawFiles = (agent as Record<string, unknown>).sandbox_files;
