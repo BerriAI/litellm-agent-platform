@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { ChannelsSection } from "@/components/channels-section";
+import { EnvVarsEditor } from "@/components/env-vars-editor";
 import { PfpUpload } from "@/components/pfp-upload";
 import { CallAgentSnippets } from "@/components/call-agent-snippets";
 import {
@@ -495,11 +496,13 @@ export default function AgentDetailPage({ params }: PageProps) {
                 )}
               </dd>
 
-              <dt className="text-muted-foreground">Env vars</dt>
-              <dd className="min-w-0 text-[13px] text-muted-foreground">
-                {Object.keys(agent.env_vars ?? {}).length > 0
-                  ? `${Object.keys(agent.env_vars!).length} variable${Object.keys(agent.env_vars!).length === 1 ? "" : "s"} set`
-                  : "None"}
+              <dt className="pt-1 text-muted-foreground">Env vars</dt>
+              <dd className="min-w-0">
+                <EnvVarsEditor
+                  value={agent.env_vars}
+                  onSave={handleEnvVarsSave}
+                  onError={(msg) => setError(msg)}
+                />
               </dd>
 
               {agent.prompt?.trim() ? (() => {
