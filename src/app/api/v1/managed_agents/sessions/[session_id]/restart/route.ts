@@ -121,7 +121,7 @@ export async function POST(req: Request, ctx: RouteContext) {
 
       const updated = await prisma.session.update({
         where: { session_id },
-        data: { status: "ready", failure_reason: null, last_seen_at: new Date(), sandbox_url: inlineUrl, harness_session_id },
+        data: { status: "ready", failure_reason: null, last_seen_at: new Date(), sandbox_url: inlineUrl, harness_session_id, task_arn: null },
       });
       invalidateSession(session_id);
       putCachedSession({
