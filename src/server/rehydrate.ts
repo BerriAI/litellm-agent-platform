@@ -62,6 +62,55 @@ export interface RehydrateOpts {
   excludeMessageId?: string;
 }
 
+// How long a racing caller waits for the winning rehydrate to finish before
+// giving up. Generous: a cold k8s bring-up can take minutes.
+const CONCURRENT_REHYDRATE_TIMEOUT_MS = 5 * 60_000;
+const CONCURRENT_REHYDRATE_POLL_MS = 1_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Another caller already claimed the rehydrate (the row was `creating`). Poll
+ * the row until it settles, so we return the same fresh sandbox instead of
+ * racing a second bring-up. Throws if the winner failed or we time out.
+ */
+async function waitForConcurrentRehydrate(
+  session_id: string,
+): Promise<RehydrateResult> {
+  const deadline = Date.now() + CONCURRENT_REHYDRATE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(CONCURRENT_REHYDRATE_POLL_MS);
+    const row = await prisma.session.findUnique({
+      where: { session_id },
+      select: {
+        status: true,
+        sandbox_url: true,
+        harness_session_id: true,
+        failure_reason: true,
+      },
+    });
+    if (!row) {
+      throw new Error(
+        `session ${session_id} vanished while waiting for concurrent rehydrate`,
+      );
+    }
+    if (row.status === "ready" && row.sandbox_url && row.harness_session_id) {
+      return {
+        sandbox_url: row.sandbox_url,
+        harness_session_id: row.harness_session_id,
+        response: null,
+      };
+    }
+    if (row.status === "failed" || row.status === "dead") {
+      throw new Error(
+        `concurrent rehydrate of ${session_id} failed: ${row.failure_reason ?? row.status}`,
+      );
+    }
+  }
+  throw new Error(`timed out waiting for concurrent rehydrate of ${session_id}`);
+}
+
 // Build the replay text for a session: durable log first, legacy blob second.
 async function buildReplayText(
   session_id: string,
@@ -83,9 +132,31 @@ export async function rehydrateSession(
 ): Promise<RehydrateResult> {
   const { agent, session_id } = opts;
 
-  // Best-effort stop of the old task before we forget its ARN — leaving an
-  // orphan is cheap (the reconciler reaps dead-row tasks); blocking recovery
-  // on it is not.
+  // Atomically claim the session for rehydration. The status guard turns this
+  // into a cross-replica lock: only one caller (in this process or any other
+  // pod) can flip a non-`creating` row to `creating`. A racing caller sees
+  // count 0 and waits for the winner instead of spawning a second sandbox and
+  // orphaning the first. An interrupted rehydrate also leaves an auditable
+  // `creating -> failed` transition rather than a phantom `ready` row.
+  const claim = await prisma.session.updateMany({
+    where: { session_id, status: { not: "creating" } },
+    data: {
+      status: "creating",
+      sandbox_url: null,
+      harness_session_id: null,
+      task_arn: null,
+      failure_reason: null,
+      last_seen_at: new Date(),
+    },
+  });
+  if (claim.count === 0) {
+    return waitForConcurrentRehydrate(session_id);
+  }
+  invalidateSession(session_id);
+
+  // We own the claim now — best-effort stop of the old task. Leaving an orphan
+  // is cheap (the reconciler reaps dead-row tasks); blocking recovery on it is
+  // not.
   if (opts.oldTaskArn) {
     try {
       await stopTask(opts.oldTaskArn, "session rehydrate");
@@ -96,22 +167,6 @@ export async function rehydrateSession(
       );
     }
   }
-
-  // Flip to `creating` up front so concurrent restart/message calls see the
-  // in-flight bring-up, and an interrupted rehydrate leaves an auditable
-  // `creating -> failed` transition rather than a phantom `ready` row.
-  await prisma.session.update({
-    where: { session_id },
-    data: {
-      status: "creating",
-      sandbox_url: null,
-      harness_session_id: null,
-      task_arn: null,
-      failure_reason: null,
-      last_seen_at: new Date(),
-    },
-  });
-  invalidateSession(session_id);
 
   const rawFiles = (agent as Record<string, unknown>).sandbox_files;
   const files = Array.isArray(rawFiles)
