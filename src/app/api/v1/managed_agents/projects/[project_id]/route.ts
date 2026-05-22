@@ -50,7 +50,11 @@ export const PATCH = wrap(async (req: Request, ctx: { params: Promise<{ project_
   const body = UpdateProjectBody.parse(await req.json());
   const data: Prisma.ProjectUpdateInput = {};
 
-  if (body.name !== undefined) data.name = body.name.trim();
+  if (body.name !== undefined) {
+    const trimmed = body.name.trim();
+    if (!trimmed) httpError(400, { error: "name is required" });
+    data.name = trimmed;
+  }
   if (body.description !== undefined) data.description = body.description;
   if (body.repo_url !== undefined) data.repo_url = body.repo_url?.trim() || null;
   if (body.env_vars !== undefined) data.env_vars = body.env_vars as Prisma.InputJsonValue;

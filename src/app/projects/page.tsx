@@ -174,8 +174,12 @@ export default function ProjectsPage() {
   }, []);
 
   async function handleDelete(id: string) {
-    await deleteProject(id).catch(() => {/* ignore */});
-    setProjects((prev) => prev.filter((p) => p.project_id !== id));
+    try {
+      await deleteProject(id);
+      setProjects((prev) => prev.filter((p) => p.project_id !== id));
+    } catch {
+      // TODO: surface an error toast
+    }
   }
 
   return (
