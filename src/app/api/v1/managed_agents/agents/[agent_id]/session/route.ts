@@ -711,15 +711,24 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
       sandboxes: null,
     });
 
-    if (body.initial_prompt) {
-      void harnessSendMessage({
-        sandbox_url: inlineUrl,
+    // Run the initial prompt through the shared persistence path so brain-inline
+    // sessions (used by automations) record their turn + snapshot the thread to
+    // the DB. The old bare harnessSendMessage persisted nothing, so an automation
+    // session showed an empty chat AND empty Log once the live thread was gone.
+    // runInitialPrompt handles appendUserMessage, completeAssistantMessage, and
+    // the periodic/final history snapshot.
+    if (
+      body.initial_prompt ||
+      (body.initial_attachments && body.initial_attachments.length > 0)
+    ) {
+      void runInitialPrompt(
+        agent,
+        session.session_id,
+        inlineUrl,
         harness_session_id,
-        model: agent.model,
-        parts: expandMessage(body.initial_prompt),
-      }).catch((err: unknown) => {
-        console.error(`brain-inline initial_prompt failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+        body.initial_prompt ?? "",
+        body.initial_attachments,
+      );
     }
 
     const updatedSession = await prisma.session.findUniqueOrThrow({ where: { session_id: session.session_id } });
