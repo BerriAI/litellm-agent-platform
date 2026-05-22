@@ -120,6 +120,7 @@ export async function POST(req: Request, ctx: RouteContext) {
         sandbox_tools: true,
         projects,
         agent_id: agent.agent_id,
+        platform_session_id: session_id,
       });
 
       const updated = await prisma.session.update({

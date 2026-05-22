@@ -595,6 +595,7 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
       projects,
       agent_id: agent.agent_id,
       mcp_servers: mcpServers,
+      platform_session_id: session.session_id,
     });
 
     await prisma.session.update({

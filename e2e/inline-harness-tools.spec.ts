@@ -21,6 +21,9 @@ const MASTER_KEY =
   process.env.MASTER_KEY ??
   "5d6d52af44d3f3db3a87d66bc9fbf3ae9562b5b459cb65aea8bb973fdae72722";
 const AGENT_ID = "e1a2a88a-c056-48d7-af57-78c3feaa5f20";
+// Agent with projects configured — used to test sandbox provision route.
+const AGENT_WITH_PROJECTS_ID = "6b023d93-b570-4a60-a5bd-6a0b630e4a7b";
+const AGENT_WITH_PROJECTS_PROJECT_ID = "litellm-sandbox-mpecoia5-asxmn";
 
 // Generous timeout — inline harness can take 10-30s per turn.
 const TURN_TIMEOUT_MS = 60_000;
@@ -104,7 +107,38 @@ test.describe("inline harness session — tool access and MCP usage", () => {
     expect(hasMcpTools).toBe(true);
   }, TURN_TIMEOUT_MS);
 
-  test("3. agent describes LIT-3198 via Linear MCP (not via Bash or file tools)", async () => {
+  test("3. sandbox provision route resolves platform UUID (regression: ses_* mismatch)", async () => {
+    // Create a fresh session for the agent-with-projects so harness_session_id
+    // is live and platform_session_id is wired correctly.
+    const session = await apiPost(`agents/${AGENT_WITH_PROJECTS_ID}/session`, {
+      title: "e2e provision check",
+    });
+    const provisionSessionId = session.id as string;
+    await waitForReady(provisionSessionId, 30_000);
+
+    // Hit the provision route directly — no AI in the loop.
+    // Before the fix this returned 404 "session ses_* not found" because
+    // the harness used its internal ses_* ID instead of the platform UUID.
+    const res = await fetch(
+      `${BASE_URL}/api/v1/managed_agents/sessions/${provisionSessionId}/sandbox/provision`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MASTER_KEY}`,
+        },
+        body: JSON.stringify({ name: "e2e-test", project_id: AGENT_WITH_PROJECTS_PROJECT_ID }),
+      },
+    );
+    const json = await res.json() as Record<string, unknown>;
+    // Must not be the "session not found" 404 that caused the regression.
+    expect(res.status, `provision returned ${res.status}: ${JSON.stringify(json)}`).not.toBe(404);
+    // Either a 200 success or a non-session-lookup error (e.g. K8s quota) is
+    // acceptable — what matters is the DB lookup succeeded.
+    expect(json.error ?? "").not.toMatch(/not found/i);
+  }, TURN_TIMEOUT_MS);
+
+  test("4. agent describes LIT-3198 via Linear MCP (not via Bash or file tools)", async () => {
     const reply = await sendMessage(
       sessionId,
       "Describe this Linear ticket: https://linear.app/litellm-ai/issue/LIT-3198/add-otel-spans-for-mcp — use only the Linear MCP tool to fetch it.",

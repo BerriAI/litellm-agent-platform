@@ -136,6 +136,7 @@ interface Session {
   sandbox_tools: boolean;              // when true: restrict to sandbox MCP tools
   projects: SandboxProject[];          // available project templates (sandbox mode)
   mcp_servers: ManagedMcpServer[];     // external MCP servers attached to session
+  platform_session_id: string | null;  // platform UUID for sandbox MCP callbacks
 }
 
 const sessions = new Map<string, Session>();
@@ -275,7 +276,7 @@ async function runTurn(
   // Sandbox mode: a per-session MCP server exposing provision + execute,
   // built lazily on each turn (it's stateless — only needs session_id).
   // Returns null when LAP_BASE_URL/LAP_AUTH_TOKEN aren't set.
-  const sandboxMcp = s.sandbox_tools ? buildSandboxMcpServer(s.id) : null;
+  const sandboxMcp = s.sandbox_tools ? buildSandboxMcpServer(s.platform_session_id ?? s.id) : null;
 
   // Build the system prompt, appending available project templates when
   // running in sandbox mode so the model knows which IDs to pass to provision().
@@ -733,6 +734,7 @@ app.post("/session", async (c) => {
   let sandbox_tools = false;
   let projects: SandboxProject[] = [];
   let mcp_servers: ManagedMcpServer[] = [];
+  let platform_session_id: string | null = null;
   try {
     const body = (await c.req.json()) as {
       title?: string;
@@ -741,6 +743,7 @@ app.post("/session", async (c) => {
       sandbox_tools?: boolean;
       projects?: Array<{ id: string; name: string; description: string; repo_url?: string }>;
       mcp_servers?: Array<{ name: string; url: string; transport?: "sse" | "http" }>;
+      platform_session_id?: string;
     };
     title = body?.title;
     prompt = body?.prompt;
@@ -750,6 +753,7 @@ app.post("/session", async (c) => {
     mcp_servers = Array.isArray(body?.mcp_servers)
       ? body.mcp_servers.filter(s => s?.name && s?.url)
       : [];
+    platform_session_id = typeof body?.platform_session_id === "string" ? body.platform_session_id : null;
   } catch {
     // empty body is fine — opencode accepts that too.
   }
@@ -775,6 +779,7 @@ app.post("/session", async (c) => {
     sandbox_tools,
     projects,
     mcp_servers,
+    platform_session_id,
   });
   return c.json({ id, title: title ?? null });
 });

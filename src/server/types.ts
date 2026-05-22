@@ -742,6 +742,9 @@ export interface HarnessCreateSessionOpts {
   agent_id?: string;
   /** External MCP servers to attach to this session (inline harness only). */
   mcp_servers?: HarnessMcpServerSpec[];
+  /** Platform session UUID — forwarded to the harness so sandbox MCP tools
+   *  can call back to the correct /sessions/{id}/sandbox/* routes. */
+  platform_session_id?: string;
 }
 
 export interface HarnessSendMessageOpts {
