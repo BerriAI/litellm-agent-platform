@@ -92,12 +92,39 @@ model Automation {
   created_by    String?
 
   agent Agent @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  runs  AutomationRun[]
 
   // Worker claim path: enabled rows whose next_run_at is due.
   @@index([enabled, next_run_at])
   // Agent detail page: list automations for one agent.
   @@index([agent_id])
   @@map("managed_agent_automation")
+}
+
+// One row per time an automation fired. Gives the agent page a run log:
+// when each run started, whether it completed, and the session it spawned.
+//
+// Lifecycle: created `running` when the worker fires the automation (with the
+// spawned session_id), then resolved to `succeeded`/`failed` by
+// reconcileAutomationRuns() on a later worker tick by inspecting the linked
+// session — or `failed` immediately if the session never spawned.
+model AutomationRun {
+  run_id        String    @id @default(uuid())
+  automation_id String
+  agent_id      String    // denormalised so the agent-page log is a single-table scan
+  session_id    String?   // the spawned session, when bring-up succeeded
+  status        String    @default("running") // running | succeeded | failed
+  error         String?
+  started_at    DateTime  @default(now())
+  finished_at   DateTime?
+
+  automation Automation @relation(fields: [automation_id], references: [automation_id], onDelete: Cascade)
+
+  // Agent-page log: most-recent runs for one agent.
+  @@index([agent_id, started_at])
+  // Completion reconcile: open runs to resolve.
+  @@index([status])
+  @@map("managed_agent_automation_run")
 }
 
 model Session {
