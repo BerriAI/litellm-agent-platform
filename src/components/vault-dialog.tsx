@@ -13,9 +13,44 @@
  * close→reopen here, unlike the wire inspector.
  */
 
+import { useEffect, useState } from "react";
 import { ShieldCheck, X } from "lucide-react";
 
 import { InterceptionsPanel } from "@/app/sessions/[sid]/interceptions-panel";
+import { getSessionVaultKeys } from "@/lib/api";
+
+function VaultKeysSection({ sessionId }: { sessionId: string }) {
+  const [keys, setKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ctl = new AbortController();
+    getSessionVaultKeys(sessionId, { signal: ctl.signal })
+      .then((k) => { if (!cancelled) setKeys(k); })
+      .catch(() => {});
+    return () => { cancelled = true; ctl.abort(); };
+  }, [sessionId]);
+
+  if (keys.length === 0) return null;
+
+  return (
+    <div className="rounded border border-gray-200 bg-white px-3 py-2">
+      <div className="text-[11px] text-gray-500 font-medium mb-1.5">
+        Keys in vault ({keys.length})
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {keys.map((k) => (
+          <span
+            key={k}
+            className="mono text-[11px] bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5 text-gray-700"
+          >
+            {k}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function VaultPanel({
   open,
@@ -45,7 +80,8 @@ export function VaultPanel({
         </button>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-gray-50/30">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-gray-50/30 flex flex-col gap-3">
+        <VaultKeysSection sessionId={sessionId} />
         <InterceptionsPanel sessionId={sessionId} initialExpanded={true} />
       </div>
 

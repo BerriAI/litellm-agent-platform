@@ -40,6 +40,12 @@ export async function GET(req: Request, ctx: RouteContext) {
     });
     if (!row) httpError(404, `session ${session_id} not found`);
 
+    // Local dev override: set VAULT_MOCK_KEYS=KEY1,KEY2 in .env.local to
+    // bypass the pod fetch and test the UI without a running K8s cluster.
+    if (process.env.VAULT_MOCK_KEYS) {
+      return json(process.env.VAULT_MOCK_KEYS.split(",").map((k) => k.trim()).filter(Boolean));
+    }
+
     if (!row.task_arn) return json([]);
 
     try {

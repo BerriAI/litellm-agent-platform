@@ -21,7 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
-import { getSessionInterceptions, getSessionVaultKeys, type VaultInterception } from "@/lib/api";
+import { getSessionInterceptions, type VaultInterception } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -186,18 +186,6 @@ export function InterceptionsPanel({
   const [hasLoaded, setHasLoaded] = useState<boolean>(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const seenSuccessRef = useRef<boolean>(false);
-  const [vaultKeys, setVaultKeys] = useState<string[]>([]);
-
-  // Fetch vault keys once on open — they're static for the pod lifetime.
-  useEffect(() => {
-    if (!sessionId || !expanded) return;
-    let cancelled = false;
-    const ctl = new AbortController();
-    getSessionVaultKeys(sessionId, { signal: ctl.signal })
-      .then((keys) => { if (!cancelled) setVaultKeys(keys); })
-      .catch(() => { /* silent — keys are informational */ });
-    return () => { cancelled = true; ctl.abort(); };
-  }, [sessionId, expanded]);
 
   useEffect(() => {
     if (!sessionId || !expanded) return;
@@ -314,23 +302,6 @@ export function InterceptionsPanel({
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-0">
-              {vaultKeys.length > 0 && (
-                <div className="mb-3 rounded border border-gray-200 bg-gray-50 px-3 py-2">
-                  <div className="text-[11px] text-gray-500 font-medium mb-1.5">
-                    Keys in vault ({vaultKeys.length})
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {vaultKeys.map((k) => (
-                      <span
-                        key={k}
-                        className="mono text-[11px] bg-white border border-gray-200 rounded px-1.5 py-0.5 text-gray-700"
-                      >
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
               {pollError && (
                 <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1 mono text-[11px] text-red-800">
                   poll error: {pollError}

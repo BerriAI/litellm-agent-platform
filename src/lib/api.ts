@@ -1580,7 +1580,7 @@ export interface UpdateSkillRequest {
 }
 
 export function listSkills(): Promise<SkillRow[]> {
-  return api<{ data: SkillRow[] }>("GET", "/v1/skills").then((r) => r.data);
+  return api<{ data: SkillRow[] }>("GET", "/v1/skills").then((r) => r.data ?? []);
 }
 
 export function getSkill(id: string): Promise<SkillRow> {
