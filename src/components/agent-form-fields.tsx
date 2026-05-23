@@ -45,10 +45,11 @@ export interface AgentFormFieldsProps {
   onSkillSaveToLibraryChange: (v: boolean) => void;
   envVars: [string, string][];
   onEnvVarsChange: (v: [string, string][]) => void;
-  /** Egress allowlist (per-agent). Required — the form gates submit on it. */
-  allowOut: string[];
-  onAllowOutChange: (v: string[]) => void;
-  /** Per-credential host binding: env var name → allowed hosts for its value. */
+  /**
+   * Per-secret allowed hosts: env var name → the hosts that secret's value may
+   * be sent to. The agent's egress allowlist is derived from the union of these
+   * by the page on submit — there's no separate global host list.
+   */
   envVarHosts: Record<string, string[]>;
   onEnvVarHostsChange: (v: Record<string, string[]>) => void;
   enabledTools: EnabledTools;
@@ -105,7 +106,6 @@ export function AgentFormFields({
   skillMode, onSkillModeChange,
   skillSaveToLibrary, onSkillSaveToLibraryChange,
   envVars, onEnvVarsChange,
-  allowOut, onAllowOutChange,
   envVarHosts, onEnvVarHostsChange,
   enabledTools, onEnabledToolsChange,
   onMcpToolTotals,
@@ -127,13 +127,23 @@ export function AgentFormFields({
   function setEnvKey(idx: number, key: string) {
     const oldKey = envVars[idx]?.[0] ?? "";
     onEnvVarsChange(envVars.map((p, i) => (i === idx ? [key, p[1]] : p)));
-    // Carry any host binding over to the renamed key so it isn't silently lost.
-    if (oldKey !== key && envVarHosts[oldKey]) {
-      const next = { ...envVarHosts };
-      delete next[oldKey];
-      if (key.trim()) next[key] = envVarHosts[oldKey];
-      onEnvVarHostsChange(next);
+    if (oldKey === key) return;
+    const next = { ...envVarHosts };
+    // Carry any host list over to the renamed key so it isn't silently lost.
+    const carried = next[oldKey];
+    delete next[oldKey];
+    const trimmed = key.trim();
+    if (trimmed) {
+      if (carried && carried.length > 0) {
+        next[trimmed] = carried;
+      } else {
+        // First time we see a recognised secret name, pre-fill its hosts from
+        // the heuristic (e.g. LINEAR_API_KEY → api.linear.app). User can edit.
+        const suggested = suggestHostsForKey(trimmed);
+        if (suggested.length > 0) next[trimmed] = suggested;
+      }
     }
+    onEnvVarHostsChange(next);
   }
   function setEnvVal(idx: number, val: string) {
     onEnvVarsChange(envVars.map((p, i) => (i === idx ? [p[0], val] : p)));
@@ -151,14 +161,10 @@ export function AgentFormFields({
       onEnvVarHostsChange(nextHosts);
     }
   }
-  // Toggle whether the credential `key` may be swapped into requests for `host`.
-  function toggleHostForKey(key: string, host: string) {
-    const cur = envVarHosts[key] ?? [];
-    const nextHosts = cur.includes(host)
-      ? cur.filter((h) => h !== host)
-      : [...cur, host];
+  // Replace the allowed-host list for one secret.
+  function setHostsForKey(key: string, hosts: string[]) {
     const updated = { ...envVarHosts };
-    if (nextHosts.length > 0) updated[key] = nextHosts;
+    if (hosts.length > 0) updated[key] = hosts;
     else delete updated[key];
     onEnvVarHostsChange(updated);
   }
@@ -535,22 +541,7 @@ export function AgentFormFields({
         ) : null}
       </div>
 
-      {/* Allowed hosts (egress) */}
-      <div className="space-y-1.5">
-        <Label>Allowed hosts (egress)</Label>
-        <p className="text-xs text-muted-foreground">
-          The only hosts this agent can reach. Each credential below can be bound
-          to one of these, so a secret is never sent anywhere else.
-        </p>
-        <EgressHostsEditor
-          value={allowOut}
-          onChange={onAllowOutChange}
-          disabled={disabled}
-          required
-        />
-      </div>
-
-      {/* Env vars */}
+      {/* Env vars — each secret carries its own allowed hosts */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label>Environment variables (optional)</Label>
@@ -572,22 +563,16 @@ export function AgentFormFields({
           </label>
         </div>
         <p className="text-xs text-muted-foreground">
-          Injected into every session container. Stored encrypted in DB. Per-session env vars take precedence.
+          Injected into every session container, stored encrypted. For each secret,
+          set the hosts its value may be sent to — the vault only swaps the real
+          value into requests for those hosts, so it can&apos;t leak anywhere else.
         </p>
         <div className="rounded-lg border bg-card">
           <ul className="divide-y">
             {envVars.map(([k, v], idx) => {
               const key = k.trim();
-              const bound = key ? (envVarHosts[key] ?? []) : [];
-              // Hosts we'd recommend for this key that the user has allowed but
-              // not yet bound — surfaced as a one-tap suggestion.
-              const suggested = key
-                ? suggestHostsForKey(key).filter(
-                    (h) => allowOut.includes(h) && !bound.includes(h),
-                  )
-                : [];
               return (
-                <li key={idx} className="flex flex-col gap-1 px-2 py-1.5">
+                <li key={idx} className="flex flex-col gap-2 px-2 py-2">
                   <div className="flex items-center gap-2">
                     <Input
                       value={k}
@@ -620,44 +605,17 @@ export function AgentFormFields({
                     </button>
                   </div>
                   {key ? (
-                    allowOut.length === 0 ? (
-                      <p className="pl-1 text-[10px] text-muted-foreground">
-                        Add an allowed host above to bind this credential.
+                    <div className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5">
+                      <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Allowed hosts for {key}
                       </p>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-1 pl-1">
-                        <span className="text-[10px] text-muted-foreground">Send to:</span>
-                        {allowOut.map((h) => {
-                          const on = bound.includes(h);
-                          return (
-                            <button
-                              key={h}
-                              type="button"
-                              disabled={disabled}
-                              onClick={() => toggleHostForKey(key, h)}
-                              className={cn(
-                                "rounded-full border px-1.5 py-0.5 font-mono text-[10px] transition-colors disabled:opacity-40",
-                                on
-                                  ? "border-foreground bg-foreground text-background"
-                                  : "text-muted-foreground hover:border-foreground/40 hover:text-foreground",
-                              )}
-                            >
-                              {h}
-                            </button>
-                          );
-                        })}
-                        {suggested.length > 0 ? (
-                          <button
-                            type="button"
-                            disabled={disabled}
-                            onClick={() => suggested.forEach((h) => toggleHostForKey(key, h))}
-                            className="rounded-full border border-dashed px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-40"
-                          >
-                            + bind {suggested.join(", ")}
-                          </button>
-                        ) : null}
-                      </div>
-                    )
+                      <EgressHostsEditor
+                        value={envVarHosts[key] ?? []}
+                        onChange={(hosts) => setHostsForKey(key, hosts)}
+                        disabled={disabled}
+                        required
+                      />
+                    </div>
                   ) : null}
                 </li>
               );
