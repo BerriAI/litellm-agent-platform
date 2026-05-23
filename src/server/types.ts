@@ -22,7 +22,7 @@ import type {
 } from "@prisma/client";
 import { z } from "zod";
 import { isValidCron } from "@/server/automations";
-import { isValidEgressHost } from "@/lib/egress-hosts";
+import { hostAllowedByList, isValidEgressHost } from "@/lib/egress-hosts";
 import { decrypt, encrypt } from "@/server/integrations/core/crypto";
 import type { SessionOrigin } from "@/server/integrations/core/origin";
 import { parseAttachedSkillIds } from "@/server/skill-prompt";
@@ -136,6 +136,13 @@ const envVarHostsSchema = z
     { message: "env_var_hosts: each host must be a domain, *.wildcard, IP, or CIDR" },
   );
 
+// A single egress entry (allow_out / deny_out item): domain, *.wildcard, IP, or
+// CIDR. Validated up front so a malformed host can't be silently dropped by the
+// vault's parser, leaving a narrower-than-intended allowlist.
+const egressHostEntry = z.string().refine(isValidEgressHost, {
+  message: "must be a domain, *.wildcard, IP, or CIDR",
+});
+
 export const CreateAgentBody = z.object({
   name: z.string().optional(),
   model: z.string().min(1),
@@ -151,8 +158,8 @@ export const CreateAgentBody = z.object({
   branch: z.string().optional(),
   pfp_url: z.string().optional(),
   mcp_servers: z.array(z.string()).default([]),
-  allow_out: z.array(z.string()).default([]),
-  deny_out: z.array(z.string()).default([]),
+  allow_out: z.array(egressHostEntry).default([]),
+  deny_out: z.array(egressHostEntry).default([]),
   sandbox_files: z
     .array(SandboxFileSpecSchema)
     .max(SANDBOX_FILES_MAX_COUNT, `sandbox_files: max ${SANDBOX_FILES_MAX_COUNT} files`)
@@ -259,9 +266,9 @@ export const UpdateAgentBody = z.object({
       },
     ),
   /** Replace the agent's egress allowlist (per-agent host scoping). */
-  allow_out: z.array(z.string()).optional(),
+  allow_out: z.array(egressHostEntry).optional(),
   /** Replace the agent's egress denylist. */
-  deny_out: z.array(z.string()).optional(),
+  deny_out: z.array(egressHostEntry).optional(),
   /** Replace per-credential host bindings. See CreateAgentBody.env_var_hosts. */
   env_var_hosts: envVarHostsSchema,
 });
@@ -981,11 +988,12 @@ export function validateEnvVarHosts(
   envVarHosts: Record<string, string[]>,
 ): string | null {
   const keys = new Set(envVarKeys);
-  const allow = new Set(allowOut);
   for (const [key, hosts] of Object.entries(envVarHosts)) {
     if (!keys.has(key)) return `env_var_hosts: '${key}' is not a defined env var`;
     for (const h of hosts) {
-      if (!allow.has(h)) {
+      // Wildcard-aware: a bound host counts as allowed if any allow_out rule
+      // matches it (e.g. api.x.com is covered by *.x.com), matching the vault.
+      if (!hostAllowedByList(h, allowOut)) {
         return `env_var_hosts: host '${h}' for '${key}' is not in the agent's allowed hosts`;
       }
     }
