@@ -92,11 +92,7 @@ export default function NewAgentPage() {
   }, []);
 
   function applyProject(id: string | null) {
-    const nextId = id === selectedProjectId ? null : id;
-    setSelectedProjectId(nextId);
-    // Seed the agent's allowed hosts from the project default (editable after).
-    const proj = nextId ? projects.find((p) => p.id === nextId) : null;
-    if (proj?.allow_out && proj.allow_out.length > 0) setAllowOut(proj.allow_out);
+    setSelectedProjectId(id === selectedProjectId ? null : id);
   }
 
   function selectTemplate(id: string) {
@@ -129,7 +125,6 @@ export default function NewAgentPage() {
   const [branchOverride, setBranchOverride] = useState("");
   const [pfpUrl, setPfpUrl] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<[string, string][]>([["", ""]]);
-  const [allowOut, setAllowOut] = useState<string[]>([]);
   const [envVarHosts, setEnvVarHosts] = useState<Record<string, string[]>>({});
   const [enabledTools, setEnabledTools] = useState<EnabledTools>(new Map());
   const [mcpToolTotals, setMcpToolTotals] = useState<Map<string, number>>(new Map());
@@ -178,8 +173,13 @@ export default function NewAgentPage() {
       return;
     }
 
-    if (allowOut.length === 0) {
-      setError("Add at least one allowed host so the agent can reach the services it needs.");
+    // Every secret must declare at least one allowed host — that's the whole
+    // point of the per-secret scoping.
+    const unscoped = envVars
+      .map(([k]) => k.trim())
+      .filter((k) => k && !(envVarHosts[k]?.length));
+    if (unscoped.length > 0) {
+      setError(`Set at least one allowed host for: ${unscoped.join(", ")}`);
       return;
     }
 
@@ -204,11 +204,16 @@ export default function NewAgentPage() {
         const key = k.trim();
         if (key) envVarsRecord[key] = v;
       }
-      // Keep only bindings for credentials that still exist on submit.
+      // Keep only host lists for credentials that still exist on submit, and
+      // derive the agent's egress allowlist from the union of all per-secret
+      // hosts — there's no separate global list.
       const finalEnvVarHosts: Record<string, string[]> = {};
       for (const key of Object.keys(envVarsRecord)) {
         if (envVarHosts[key]?.length) finalEnvVarHosts[key] = envVarHosts[key];
       }
+      const derivedAllowOut = [
+        ...new Set(Object.values(finalEnvVarHosts).flat()),
+      ];
 
       // If a template is selected and the user edited the skill panel, merge back.
       let finalPrompt = systemPrompt.trim() || undefined;
@@ -260,7 +265,7 @@ export default function NewAgentPage() {
         mcp_allowed_tools: mcpAllowedTools.length > 0 ? mcpAllowedTools : undefined,
         env_vars: Object.keys(envVarsRecord).length > 0 ? envVarsRecord : undefined,
         env_var_hosts: Object.keys(finalEnvVarHosts).length > 0 ? finalEnvVarHosts : undefined,
-        allow_out: allowOut,
+        allow_out: derivedAllowOut,
         deny_out: selectedProject?.deny_out,
         sandbox_files: selectedProject?.files,
         skill_ids: pickedSkillIds.length > 0 ? pickedSkillIds : undefined,
@@ -424,7 +429,6 @@ export default function NewAgentPage() {
                 skillMode={skillMode} onSkillModeChange={setSkillMode}
                 skillSaveToLibrary={skillSaveToLibrary} onSkillSaveToLibraryChange={setSkillSaveToLibrary}
                 envVars={envVars} onEnvVarsChange={setEnvVars}
-                allowOut={allowOut} onAllowOutChange={setAllowOut}
                 envVarHosts={envVarHosts} onEnvVarHostsChange={setEnvVarHosts}
                 enabledTools={enabledTools}
                 onEnabledToolsChange={(v) => setEnabledTools(v as Parameters<typeof setEnabledTools>[0])}
