@@ -1936,7 +1936,7 @@ function Composer({
   const [slashIndex, setSlashIndex] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const filteredSkills = skills.filter(
+  const filteredSkills = (skills ?? []).filter(
     (s) =>
       s.name.toLowerCase().includes(slashFilter.toLowerCase()) ||
       (s.description ?? "").toLowerCase().includes(slashFilter.toLowerCase()),
