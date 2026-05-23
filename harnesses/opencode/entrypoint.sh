@@ -49,24 +49,17 @@ esac
 # Sandbox tools: when E2B is configured, mount the bundled stdio MCP that
 # exposes provision/execute (same tool surface as the claude-agent-sdk harness).
 # Lives at /opt/lap/opencode-sandbox-mcp with its own node_modules baked in.
-MCP_BLOCK=""
-if [ -n "${E2B_API_KEY:-}" ]; then
-  # Build the env object with node so the API key is JSON-escaped regardless of
-  # special characters (a raw " or \ in the key would corrupt opencode.json).
-  MCP_ENV=$(node -e 'process.stdout.write(JSON.stringify({E2B_API_KEY:process.env.E2B_API_KEY||"",E2B_TEMPLATE:process.env.E2B_TEMPLATE||"base"}))')
-  MCP_BLOCK=$(cat <<EOF
-  "mcp": {
-    "sandbox": {
-      "type": "local",
-      "command": ["node", "/opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs"],
-      "enabled": true,
-      "environment": ${MCP_ENV}
-    }
-  },
-EOF
-)
-  echo "[entrypoint] E2B configured — mounting sandbox MCP (provision/execute)"
-fi
+# Build the opencode `mcp` object: the E2B sandbox MCP (when E2B_API_KEY is set)
+# plus every MCP server the LiteLLM key can access (Linear, Slack, GitHub, ...).
+# gen-mcp-config.mjs emits JSON and JSON-escapes all values, so keys with
+# special characters can't corrupt opencode.json. Failure is non-fatal — it
+# emits {} and the harness still boots.
+MCP_OBJ=$(node /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs 2>/var/log/gen-mcp.err || echo '{}')
+[ -z "$MCP_OBJ" ] && MCP_OBJ='{}'
+MCP_BLOCK="  \"mcp\": ${MCP_OBJ},"
+MCP_NAMES=$(printf '%s' "$MCP_OBJ" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(Object.keys(JSON.parse(s)).join(", "))}catch{}})')
+echo "[entrypoint] MCP servers wired into opencode: ${MCP_NAMES:-none}"
+[ -s /var/log/gen-mcp.err ] && cat /var/log/gen-mcp.err
 
 cat > opencode.json <<EOF
 {
@@ -95,13 +88,21 @@ ${MCP_BLOCK}
 }
 EOF
 
-if [ -n "${AGENT_PROMPT:-}" ]; then
+# Tell the agent which MCP servers are available so it doesn't guess from
+# training. opencode exposes MCP tools as <server>_<tool> (e.g.
+# slack_bot_post_message), mirroring the names listed here.
+MCP_NOTE=""
+if [ -n "${MCP_NAMES:-}" ]; then
+  MCP_NOTE=$'\n\nMCP servers available in this session: '"${MCP_NAMES}"$'. Call their tools with the <server>_<tool> prefix (e.g. slack_bot_post_message).'
+fi
+
+if [ -n "${AGENT_PROMPT:-}" ] || [ -n "$MCP_NOTE" ]; then
   mkdir -p .opencode/agent
   cat > .opencode/agent/default.md <<EOF2
 ---
 description: sandbox agent
 ---
-${AGENT_PROMPT}
+${AGENT_PROMPT:-}${MCP_NOTE}
 EOF2
 fi
 
