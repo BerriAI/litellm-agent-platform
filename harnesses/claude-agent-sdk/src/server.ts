@@ -318,6 +318,35 @@ async function runTurn(
     effectiveSystemPrompt = (effectiveSystemPrompt ?? "") + mcpNote;
   }
 
+  // External MCP servers attached to this session (Linear, GitHub, etc.). Wired
+  // in BOTH sandbox and normal mode. Reached via LiteLLM's MCP proxy using the
+  // harness's LITELLM_API_KEY (vault-swapped at egress) — no raw credentials
+  // leave the platform.
+  const litellmKey = process.env.LITELLM_API_KEY ?? "";
+  const externalMcpServers: Record<string, import("@anthropic-ai/claude-agent-sdk").McpServerConfig> =
+    Object.fromEntries(
+      s.mcp_servers.map((m) => {
+        const transport = m.transport ?? "sse";
+        const headers = litellmKey
+          ? { "Authorization": `Bearer ${litellmKey}` }
+          : undefined;
+        if (transport === "http") {
+          const cfg: import("@anthropic-ai/claude-agent-sdk").McpHttpServerConfig = {
+            type: "http",
+            url: m.url,
+            ...(headers ? { headers } : {}),
+          };
+          return [m.name, cfg];
+        }
+        const cfg: import("@anthropic-ai/claude-agent-sdk").McpSSEServerConfig = {
+          type: "sse",
+          url: m.url,
+          ...(headers ? { headers } : {}),
+        };
+        return [m.name, cfg];
+      }),
+    );
+
   const options: Options = {
     cwd: REPO_DIR,
     model: modelId,
@@ -353,62 +382,43 @@ async function runTurn(
     ],
     ...(CLAUDE_BIN ? { pathToClaudeCodeExecutable: CLAUDE_BIN } : {}),
     ...(s.sandbox_tools
-      ? (() => {
+      ? {
           // Sandbox mode: block dangerous built-in file/shell tools and expose
-          // the lap-sandbox MCP (provision/execute) plus any external MCPs
-          // attached to this session (e.g. Linear, GitHub). External MCPs are
-          // called via LiteLLM's MCP proxy using the harness's LITELLM_API_KEY
-          // (vault-swapped at egress), so no raw credentials leave the platform.
-          const litellmKey = process.env.LITELLM_API_KEY ?? "";
-          const externalMcpServers: Record<string, import("@anthropic-ai/claude-agent-sdk").McpServerConfig> =
-            Object.fromEntries(
-              s.mcp_servers.map((m) => {
-                const transport = m.transport ?? "sse";
-                const headers = litellmKey
-                  ? { "Authorization": `Bearer ${litellmKey}` }
-                  : undefined;
-                if (transport === "http") {
-                  const cfg: import("@anthropic-ai/claude-agent-sdk").McpHttpServerConfig = {
-                    type: "http",
-                    url: m.url,
-                    ...(headers ? { headers } : {}),
-                  };
-                  return [m.name, cfg];
-                }
-                const cfg: import("@anthropic-ai/claude-agent-sdk").McpSSEServerConfig = {
-                  type: "sse",
-                  url: m.url,
-                  ...(headers ? { headers } : {}),
-                };
-                return [m.name, cfg];
-              })
-            );
-          return {
-            // No allowedTools positive-list when external MCPs are present —
-            // their tool names are not known at session-create time. Rely
-            // entirely on disallowedTools to block the dangerous built-ins.
-            mcpServers: {
-              ...(sandboxMcp ? { "lap-sandbox": sandboxMcp } : {}),
-              ...externalMcpServers,
-            },
-          };
-        })()
+          // the lap-sandbox MCP (provision/execute) plus any external MCPs.
+          // No allowedTools positive-list when external MCPs are present —
+          // their tool names are not known at session-create time. Rely
+          // entirely on disallowedTools to block the dangerous built-ins.
+          mcpServers: {
+            ...(sandboxMcp ? { "lap-sandbox": sandboxMcp } : {}),
+            ...externalMcpServers,
+          },
+        }
       : {
-          // Normal mode: full memory + automations + screenshot + recording + slack set.
+          // Normal mode: full memory + automations + screenshot + recording +
+          // slack set, plus any external MCPs attached to this session.
           mcpServers: {
             ...(MEMORY_MCP ? { "lap-memory": MEMORY_MCP } : {}),
             ...(AUTOMATIONS_MCP ? { "lap-automations": AUTOMATIONS_MCP } : {}),
             "lap-screenshot": SCREENSHOT_MCP,
             "lap-recording": RECORDING_MCP,
             "lap-slack": SLACK_MCP,
+            ...externalMcpServers,
           },
-          allowedTools: [
-            ...(MEMORY_MCP ? [...MEMORY_TOOL_NAMES] : []),
-            ...(AUTOMATIONS_MCP ? [...AUTOMATION_TOOL_NAMES] : []),
-            ...SCREENSHOT_TOOL_NAMES,
-            ...RECORDING_TOOL_NAMES,
-            ...SLACK_TOOL_NAMES,
-          ],
+          // The lap-* tools use a positive allow-list. External MCP tool names
+          // aren't known at session-create time, so when externals are present
+          // we drop the allow-list and rely on disallowedTools — otherwise the
+          // allow-list would silently block every mcp__<external>__ tool.
+          ...(s.mcp_servers.length > 0
+            ? {}
+            : {
+                allowedTools: [
+                  ...(MEMORY_MCP ? [...MEMORY_TOOL_NAMES] : []),
+                  ...(AUTOMATIONS_MCP ? [...AUTOMATION_TOOL_NAMES] : []),
+                  ...SCREENSHOT_TOOL_NAMES,
+                  ...RECORDING_TOOL_NAMES,
+                  ...SLACK_TOOL_NAMES,
+                ],
+              }),
         }),
     // Resume the SDK's persisted session if we have one — that's how the
     // SDK stitches turn N+1 onto turn N's history without us tracking it.
