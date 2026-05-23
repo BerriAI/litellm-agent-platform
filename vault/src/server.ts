@@ -165,6 +165,7 @@ interface InterceptionRecord {
   path: string;
   stubs_swapped: string[];
   real_value_fingerprint: InterceptionRealFingerprint[];
+  blocked?: boolean;
 }
 
 const interceptions: InterceptionRecord[] = [];
@@ -308,6 +309,19 @@ const proxy = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: "ok", cleared: true }));
     return;
   }
+  // Returns the credential names registered in this vault instance (i.e. the
+  // REAL_<KEY> names without the "REAL_" prefix). No stubs, no values — safe
+  // to surface in the UI so the user knows what keys vault is managing.
+  if (req.method === "GET" && req.url === "/keys") {
+    if (!inspectTokenMatches(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(Array.from(STUB_TO_CRED.values())));
+    return;
+  }
 
   // Plain HTTP proxy requests arrive with an absolute URL (e.g. GET http://example.com/path).
   // Apply the same egress policy as HTTPS CONNECT, then forward if allowed.
@@ -319,6 +333,15 @@ const proxy = http.createServer((req, res) => {
     const host = parsed.hostname;
     if (!isEgressAllowed(host)) {
       console.warn(`[vault] BLOCKED http ${host} (egress policy)`);
+      recordInterception({
+        timestamp: new Date().toISOString(),
+        method: String(req.method ?? "GET"),
+        host,
+        path: parsed.pathname + parsed.search,
+        stubs_swapped: [],
+        real_value_fingerprint: [],
+        blocked: true,
+      });
       res.writeHead(403, { "x-vault-blocked": "egress-policy" });
       res.end("blocked by egress policy");
       return;
@@ -364,6 +387,15 @@ proxy.on("connect", async (req, socket) => {
 
   if (!isEgressAllowed(host)) {
     console.warn(`[vault] BLOCKED ${host} (egress policy)`);
+    recordInterception({
+      timestamp: new Date().toISOString(),
+      method: "CONNECT",
+      host,
+      path: "/",
+      stubs_swapped: [],
+      real_value_fingerprint: [],
+      blocked: true,
+    });
     socket.write("HTTP/1.1 403 Forbidden\r\nProxy-Agent: vault\r\nX-Vault-Blocked: egress-policy\r\n\r\n");
     socket.destroy();
     return;

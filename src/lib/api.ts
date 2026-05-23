@@ -1040,6 +1040,42 @@ export async function getSessionInterceptions(
   return body as VaultInterception[];
 }
 
+export async function getSessionVaultKeys(
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<string[]> {
+  const path = `/v1/managed_agents/sessions/${encodeURIComponent(sessionId)}/vault-keys`;
+  const auth = authHeader();
+  const headers: Record<string, string> = {};
+  if (auth) headers["Authorization"] = auth;
+  const res = await fetch(`${PROXY_PREFIX}${path}`, {
+    method: "GET",
+    headers,
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearStoredMasterKey();
+      if (
+        typeof window !== "undefined" &&
+        !window.location.pathname.startsWith("/login")
+      ) {
+        const next = encodeURIComponent(
+          window.location.pathname + window.location.search,
+        );
+        window.location.href = `/login?next=${next}`;
+      }
+    }
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text, text || `vault-keys ${res.status}`);
+  }
+  const body = (await res.json()) as unknown;
+  if (!Array.isArray(body)) {
+    throw new ApiError(500, "", "vault-keys: expected JSON array");
+  }
+  return body as string[];
+}
+
 // One entry in a session's event timeline (Session Log panel). Mirrors
 // SessionLogEvent in src/server/sessionStore.ts.
 export interface SessionLogEvent {

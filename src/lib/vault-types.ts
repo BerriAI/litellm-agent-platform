@@ -24,4 +24,5 @@ export interface VaultInterception {
   path: string;
   stubs_swapped: string[];
   real_value_fingerprint: VaultInterceptionFingerprint[];
+  blocked?: boolean;
 }

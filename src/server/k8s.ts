@@ -1341,6 +1341,31 @@ export async function fetchVaultInterceptions(
   return body as VaultInterception[];
 }
 
+export async function fetchVaultKeys(
+  task_arn: string,
+  opts: { timeoutMs?: number; port?: number } = {},
+): Promise<string[] | null> {
+  const port = opts.port ?? DEFAULT_VAULT_PORT;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_VAULT_FETCH_TIMEOUT_MS;
+  const ip = await podIPFor(task_arn);
+  if (!ip) return null;
+  const hostPart = ip.includes(":") ? `[${ip}]` : ip;
+  const url = `http://${hostPart}:${port}/keys`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { "x-vault-inspect-token": vaultInspectToken(task_arn) },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    throw new Error(`vault /keys ${res.status} ${res.statusText}`);
+  }
+  const body = (await res.json()) as unknown;
+  if (!Array.isArray(body)) {
+    throw new Error("vault /keys: expected JSON array");
+  }
+  return body as string[];
+}
+
 // ---------------------------------------------------------------------------
 // Inline harness Deployment — shared claude-agent-sdk server for brain-inline
 // sessions. Unlike session sandboxes (Sandbox CRs), this is a long-running

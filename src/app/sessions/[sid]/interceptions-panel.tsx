@@ -21,7 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
-import { getSessionInterceptions, type VaultInterception } from "@/lib/api";
+import { getSessionInterceptions, getSessionVaultKeys, type VaultInterception } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -87,6 +87,23 @@ function renderInterceptionRows(
   idx: number,
 ): React.ReactElement[] {
   const baseKey = `${rec.timestamp}-${idx}`;
+  if (rec.blocked) {
+    return [
+      <TableRow key={baseKey} className="bg-red-50">
+        <TableCell className="mono text-[11px]">
+          {formatTimestamp(rec.timestamp)}
+        </TableCell>
+        <TableCell>
+          <Badge variant="secondary">{rec.method}</Badge>
+        </TableCell>
+        <TableCell className="mono text-[11px]">{rec.host}</TableCell>
+        <TableCell className="mono text-[11px] break-all">{rec.path}</TableCell>
+        <TableCell colSpan={3}>
+          <Badge variant="destructive">BLOCKED</Badge>
+        </TableCell>
+      </TableRow>,
+    ];
+  }
   if (rec.real_value_fingerprint.length === 0) {
     return [
       <TableRow key={baseKey}>
@@ -169,6 +186,18 @@ export function InterceptionsPanel({
   const [hasLoaded, setHasLoaded] = useState<boolean>(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const seenSuccessRef = useRef<boolean>(false);
+  const [vaultKeys, setVaultKeys] = useState<string[]>([]);
+
+  // Fetch vault keys once on open — they're static for the pod lifetime.
+  useEffect(() => {
+    if (!sessionId || !expanded) return;
+    let cancelled = false;
+    const ctl = new AbortController();
+    getSessionVaultKeys(sessionId, { signal: ctl.signal })
+      .then((keys) => { if (!cancelled) setVaultKeys(keys); })
+      .catch(() => { /* silent — keys are informational */ });
+    return () => { cancelled = true; ctl.abort(); };
+  }, [sessionId, expanded]);
 
   useEffect(() => {
     if (!sessionId || !expanded) return;
@@ -232,19 +261,16 @@ export function InterceptionsPanel({
     });
   }, [records]);
 
-  // Split sorted records into "matched" (had a real stub→real swap) and
-  // "unmatched" (request tunneled through unchanged). The matched group is
-  // the signal the user cares about; unmatched rows live in a collapsed
-  // accordion so they don't drown out the meaningful events. We key off
-  // `stubs_swapped` (the authoritative server-side list) rather than the
-  // fingerprint array, which can be empty even when a swap occurred if the
-  // sidecar elided the real-tail.
+  // Split sorted records into "notable" (had a real stub→real swap, OR was
+  // blocked by egress policy) and "unmatched" (request tunneled through
+  // unchanged with no swap and no block). Notable rows are the signal the
+  // user cares about; unmatched rows live in a collapsed accordion.
   const matched = useMemo(
-    () => sorted.filter((r) => r.stubs_swapped.length > 0),
+    () => sorted.filter((r) => r.stubs_swapped.length > 0 || r.blocked),
     [sorted],
   );
   const unmatched = useMemo(
-    () => sorted.filter((r) => r.stubs_swapped.length === 0),
+    () => sorted.filter((r) => r.stubs_swapped.length === 0 && !r.blocked),
     [sorted],
   );
 
@@ -288,6 +314,23 @@ export function InterceptionsPanel({
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-0">
+              {vaultKeys.length > 0 && (
+                <div className="mb-3 rounded border border-gray-200 bg-gray-50 px-3 py-2">
+                  <div className="text-[11px] text-gray-500 font-medium mb-1.5">
+                    Keys in vault ({vaultKeys.length})
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {vaultKeys.map((k) => (
+                      <span
+                        key={k}
+                        className="mono text-[11px] bg-white border border-gray-200 rounded px-1.5 py-0.5 text-gray-700"
+                      >
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {pollError && (
                 <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1 mono text-[11px] text-red-800">
                   poll error: {pollError}
