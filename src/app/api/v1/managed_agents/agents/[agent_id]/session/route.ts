@@ -30,6 +30,7 @@
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
+import { agentMcpServerIds, resolveAgentMcpServers } from "@/server/agent-mcp";
 import {
   buildSkillSandboxFiles,
   getInlineHarnessPodUrl,
@@ -57,7 +58,6 @@ import {
   toApiSession,
   type AgentRow,
   type HarnessMessageResponse,
-  type HarnessMcpServerSpec,
   type SessionRow,
   type WarmTaskRow,
 } from "@/server/types";
@@ -99,50 +99,6 @@ interface BringUpBody {
   skill_ids?: string[];
 }
 
-// ---------------------------------------------------------------------------
-// Resolve agent MCP server IDs → HarnessMcpServerSpec configs.
-// Fetches server metadata from LiteLLM and constructs URLs for LiteLLM's
-// MCP proxy. The harness uses its own LITELLM_API_KEY (vault-swapped) to
-// call these endpoints — no credentials flow through the session body.
-// ---------------------------------------------------------------------------
-
-async function resolveAgentMcpServers(
-  serverIds: string[],
-): Promise<{ specs: HarnessMcpServerSpec[]; warning: string | null }> {
-  if (!serverIds || serverIds.length === 0) return { specs: [], warning: null };
-  const litellmBase = env.LITELLM_API_BASE.replace(/\/+$/, "");
-  try {
-    const res = await fetch(`${litellmBase}/v1/mcp/server`, {
-      headers: { Authorization: `Bearer ${env.LITELLM_API_KEY}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      console.warn(`resolveAgentMcpServers: LiteLLM returned ${res.status}`);
-      return { specs: [], warning: "MCP server list unavailable — tools may be missing. LiteLLM returned an error." };
-    }
-    const servers = (await res.json()) as Array<{
-      server_id: string;
-      server_name: string;
-      alias?: string;
-    }>;
-    const byId = new Map(servers.map((s) => [s.server_id, s]));
-    const specs: HarnessMcpServerSpec[] = [];
-    for (const id of serverIds) {
-      const s = byId.get(id);
-      if (!s) continue;
-      const name = s.alias || s.server_name;
-      specs.push({
-        name,
-        url: `${litellmBase}/mcp/${encodeURIComponent(name)}`,
-        transport: "http",
-      });
-    }
-    return { specs, warning: null };
-  } catch (err) {
-    console.warn(`resolveAgentMcpServers: fetch failed — ${err instanceof Error ? err.message : String(err)}`);
-    return { specs: [], warning: "MCP tools could not be loaded (LiteLLM unreachable). The session was created without them." };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Maps a spawn error to a short Prometheus label value for session_spawn_failure_total.
@@ -406,10 +362,7 @@ async function finishBringUp(
   // MCPs — only the brain-inline path resolved them. Each server is reached
   // through LiteLLM's MCP proxy using the harness's vault-swapped LITELLM_API_KEY,
   // so no raw credentials flow to the sandbox pod.
-  const rawMcpServerIds = Array.isArray(agent.mcp_servers)
-    ? (agent.mcp_servers as unknown[]).filter((v): v is string => typeof v === "string")
-    : [];
-  const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
+  const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(agentMcpServerIds(agent));
   if (mcpWarning) console.warn(`finishBringUp session_id=${session_id}: ${mcpWarning}`);
 
   const harness_session_id = await harnessCreateSession({
@@ -693,10 +646,7 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
     // harness can wire them into the SDK's mcpServers option. Each server is
     // accessed through LiteLLM's MCP proxy using the harness's LITELLM_API_KEY
     // (vault-swapped at egress) — no raw credentials flow to the harness pod.
-    const rawMcpServerIds = Array.isArray(agent.mcp_servers)
-      ? (agent.mcp_servers as unknown[]).filter((v): v is string => typeof v === "string")
-      : [];
-    const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
+    const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(agentMcpServerIds(agent));
 
     const inlineSkillFiles = body.skill_ids?.length
       ? await buildSkillSandboxFiles(body.skill_ids)

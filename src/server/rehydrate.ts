@@ -30,6 +30,7 @@ import {
   harnessSendMessage,
 } from "@/server/harness";
 import { inlineHarnessUrl, runTask, stopTask, waitHttpReady, waitRunningGetUrl } from "@/server/k8s";
+import { agentMcpServerIds, resolveAgentMcpServers } from "@/server/agent-mcp";
 import { invalidateSession, putCachedSession } from "@/server/sessionCache";
 import {
   formatSessionMessagesAsText,
@@ -209,6 +210,9 @@ export async function rehydrateSession(
       const projects = Array.isArray(rawProjects)
         ? (rawProjects as Array<{ id: string; name: string; description: string; repo_url?: string }>)
         : [];
+      const { specs: inlineMcpServers } = await resolveAgentMcpServers(
+        agentMcpServerIds(agent),
+      );
       harness_session_id = await harnessCreateSession({
         sandbox_url: inlineUrl,
         title: "rehydrate",
@@ -216,6 +220,7 @@ export async function rehydrateSession(
         sandbox_tools: true,
         projects,
         agent_id: agent.agent_id,
+        mcp_servers: inlineMcpServers,
         platform_session_id: session_id,
       });
     } catch (e) {
@@ -287,10 +292,21 @@ export async function rehydrateSession(
       console.log(`[rehydrate] session=${session_id} phase=harness_ready elapsed=${elapsed()}`);
     }
 
+    // Resolve + forward the agent's external MCP servers, mirroring the
+    // create path (finishBringUp). Without this, a restarted/recovered session
+    // silently loses its attached MCPs (e.g. linear) — only the create path
+    // wired them. Reached through LiteLLM's MCP proxy with the harness's
+    // vault-swapped LITELLM_API_KEY, so no raw credentials hit the session body.
+    const { specs: mcpServers } = await resolveAgentMcpServers(
+      agentMcpServerIds(agent),
+    );
     const harness_session_id = await harnessCreateSession({
       sandbox_url,
       title: "restart",
       files,
+      mcp_servers: mcpServers,
+      agent_id: agent.agent_id,
+      platform_session_id: session_id,
     });
     console.log(`[rehydrate] session=${session_id} phase=session_created elapsed=${elapsed()} harness_session_id=${harness_session_id}`);
 
