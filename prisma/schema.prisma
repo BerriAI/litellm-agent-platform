@@ -25,6 +25,11 @@ model Agent {
   pfp_url             String?
   mcp_servers         Json     @default("[]")
   env_vars            Json     @default("{}")
+  // Per-credential egress binding: { "<ENV_KEY>": ["api.linear.app", ...] }.
+  // The vault only swaps a credential's real value into requests bound for one
+  // of its hosts, and each host must also appear in allow_out. Empty/missing =
+  // legacy (unbound) — treated per the vault's EGRESS_DEFAULT_DENY flag.
+  env_var_hosts       Json     @default("{}")
   allow_out           Json     @default("[]")
   deny_out            Json     @default("[]")
   sandbox_files       Json     @default("[]")
