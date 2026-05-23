@@ -409,7 +409,8 @@ async function finishBringUp(
   const rawMcpServerIds = Array.isArray(agent.mcp_servers)
     ? (agent.mcp_servers as unknown[]).filter((v): v is string => typeof v === "string")
     : [];
-  const { specs: mcpServers } = await resolveAgentMcpServers(rawMcpServerIds);
+  const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
+  if (mcpWarning) console.warn(`finishBringUp session_id=${session_id}: ${mcpWarning}`);
 
   const harness_session_id = await harnessCreateSession({
     sandbox_url,
