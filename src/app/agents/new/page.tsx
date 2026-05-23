@@ -92,7 +92,11 @@ export default function NewAgentPage() {
   }, []);
 
   function applyProject(id: string | null) {
-    setSelectedProjectId(id === selectedProjectId ? null : id);
+    const nextId = id === selectedProjectId ? null : id;
+    setSelectedProjectId(nextId);
+    // Seed the agent's allowed hosts from the project default (editable after).
+    const proj = nextId ? projects.find((p) => p.id === nextId) : null;
+    if (proj?.allow_out && proj.allow_out.length > 0) setAllowOut(proj.allow_out);
   }
 
   function selectTemplate(id: string) {
@@ -125,6 +129,8 @@ export default function NewAgentPage() {
   const [branchOverride, setBranchOverride] = useState("");
   const [pfpUrl, setPfpUrl] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<[string, string][]>([["", ""]]);
+  const [allowOut, setAllowOut] = useState<string[]>([]);
+  const [envVarHosts, setEnvVarHosts] = useState<Record<string, string[]>>({});
   const [enabledTools, setEnabledTools] = useState<EnabledTools>(new Map());
   const [mcpToolTotals, setMcpToolTotals] = useState<Map<string, number>>(new Map());
 
@@ -172,6 +178,11 @@ export default function NewAgentPage() {
       return;
     }
 
+    if (allowOut.length === 0) {
+      setError("Add at least one allowed host so the agent can reach the services it needs.");
+      return;
+    }
+
     setSubmitting(true);
     try {
       const mcpServers: string[] = [];
@@ -192,6 +203,11 @@ export default function NewAgentPage() {
       for (const [k, v] of envVars) {
         const key = k.trim();
         if (key) envVarsRecord[key] = v;
+      }
+      // Keep only bindings for credentials that still exist on submit.
+      const finalEnvVarHosts: Record<string, string[]> = {};
+      for (const key of Object.keys(envVarsRecord)) {
+        if (envVarHosts[key]?.length) finalEnvVarHosts[key] = envVarHosts[key];
       }
 
       // If a template is selected and the user edited the skill panel, merge back.
@@ -243,7 +259,8 @@ export default function NewAgentPage() {
         mcp_servers: mcpServers.length > 0 ? mcpServers : undefined,
         mcp_allowed_tools: mcpAllowedTools.length > 0 ? mcpAllowedTools : undefined,
         env_vars: Object.keys(envVarsRecord).length > 0 ? envVarsRecord : undefined,
-        allow_out: selectedProject?.allow_out,
+        env_var_hosts: Object.keys(finalEnvVarHosts).length > 0 ? finalEnvVarHosts : undefined,
+        allow_out: allowOut,
         deny_out: selectedProject?.deny_out,
         sandbox_files: selectedProject?.files,
         skill_ids: pickedSkillIds.length > 0 ? pickedSkillIds : undefined,
@@ -407,6 +424,8 @@ export default function NewAgentPage() {
                 skillMode={skillMode} onSkillModeChange={setSkillMode}
                 skillSaveToLibrary={skillSaveToLibrary} onSkillSaveToLibraryChange={setSkillSaveToLibrary}
                 envVars={envVars} onEnvVarsChange={setEnvVars}
+                allowOut={allowOut} onAllowOutChange={setAllowOut}
+                envVarHosts={envVarHosts} onEnvVarHostsChange={setEnvVarHosts}
                 enabledTools={enabledTools}
                 onEnabledToolsChange={(v) => setEnabledTools(v as Parameters<typeof setEnabledTools>[0])}
                 onMcpToolTotals={setMcpToolTotals}
