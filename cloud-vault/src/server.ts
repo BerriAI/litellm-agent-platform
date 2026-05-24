@@ -29,8 +29,7 @@ const ALG: RsaHashedKeyGenParams = {
   hash: "SHA-256",
 };
 
-// Railway sets PORT; VAULT_PORT is for K8s. Prefer PORT so Railway routes traffic correctly.
-const PORT = Number(process.env.PORT ?? process.env.VAULT_PORT ?? 14322);
+const PORT = Number(process.env.VAULT_PORT ?? 14322);
 const CA_DIR = process.env.VAULT_CA_DIR ?? "/etc/vault-ca";
 
 // ---------------------------------------------------------------------------
