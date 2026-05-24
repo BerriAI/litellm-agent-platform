@@ -597,8 +597,9 @@ export interface ApiSession {
   last_seen_at: string | null;
   // Idle window after which the reconciler reaps a `ready` sandbox. Sent
   // alongside last_seen_at so the UI shows an accurate countdown without
-  // hardcoding the constant.
-  idle_timeout_ms: number;
+  // hardcoding the constant. Null for inline harnesses — no pod to reclaim,
+  // sessions live indefinitely.
+  idle_timeout_ms: number | null;
   // Populated when status flips to `failed`. The UI surfaces this verbatim
   // on the session page so the user can see why bring-up died instead of
   // staring at a stuck "creating" spinner.
@@ -1229,7 +1230,7 @@ export function toApiSession(
         : null),
     created_at: row.created_at.toISOString(),
     last_seen_at: row.last_seen_at ? row.last_seen_at.toISOString() : null,
-    idle_timeout_ms: SESSION_IDLE_TIMEOUT_MS,
+    idle_timeout_ms: harness_id !== undefined && isInlineHarness(harness_id) ? null : SESSION_IDLE_TIMEOUT_MS,
     failure_reason: row.failure_reason ?? null,
     phase: row.phase ?? null,
     phase_detail: row.phase_detail ?? null,

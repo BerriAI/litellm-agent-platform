@@ -255,6 +255,8 @@ function formatExpiresIn(
   nowMs: number,
 ): string | null {
   if (!session || session.status !== "ready") return null;
+  // Inline harnesses have no idle timeout — sessions live indefinitely.
+  if (session.idle_timeout_ms === null) return null;
   const lastSeenIso = session.last_seen_at ?? session.created_at;
   if (!lastSeenIso) return null;
   const lastSeenMs = Date.parse(lastSeenIso);

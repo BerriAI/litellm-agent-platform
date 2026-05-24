@@ -25,8 +25,9 @@ export async function GET(req: Request) {
     const rows = await prisma.session.findMany({
       where: agent_id ? { agent_id } : {},
       orderBy: { created_at: "desc" },
+      include: { agent: { select: { harness_id: true } } },
     });
-    return Response.json(rows.map((row) => toApiSession(row)));
+    return Response.json(rows.map((row) => toApiSession(row, null, null, row.agent?.harness_id ?? undefined)));
   } catch (e) {
     if (e instanceof Response) return e;
     if (e instanceof HttpError)

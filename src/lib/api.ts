@@ -230,7 +230,7 @@ export interface SessionRow {
   last_seen_at?: string | null;
   // Idle window after which the reconciler reaps a `ready` sandbox. Sent
   // by the backend so the UI doesn't hardcode SESSION_IDLE_TIMEOUT_MS.
-  idle_timeout_ms?: number;
+  idle_timeout_ms?: number | null;
   // Populated when bring-up dies and status flips to `failed`. The
   // creating-state UI surfaces this verbatim so the user knows why the
   // sandbox never came up.
