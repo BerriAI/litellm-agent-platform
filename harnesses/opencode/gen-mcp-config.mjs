@@ -31,6 +31,10 @@ if (e2bKey) {
     environment: {
       E2B_API_KEY: e2bKey,
       E2B_TEMPLATE: process.env.E2B_TEMPLATE || "base",
+      ...(process.env.LAP_BASE_URL && { LAP_BASE_URL: process.env.LAP_BASE_URL }),
+      ...(process.env.LAP_AUTH_TOKEN && { LAP_AUTH_TOKEN: process.env.LAP_AUTH_TOKEN }),
+      ...(process.env.MASTER_KEY && { MASTER_KEY: process.env.MASTER_KEY }),
+      ...(process.env.SESSION_ID && { SESSION_ID: process.env.SESSION_ID }),
     },
   };
 }
