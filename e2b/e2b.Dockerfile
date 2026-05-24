@@ -19,6 +19,11 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/combined-ca.crt
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/combined-ca.crt
 ENV GIT_SSL_CAINFO=/etc/ssl/certs/combined-ca.crt
 ENV NODE_EXTRA_CA_CERTS=/etc/cloud-vault-ca.crt
+# Python / pip / uv / requests
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/combined-ca.crt
+ENV PIP_CERT=/etc/ssl/certs/combined-ca.crt
+# uv respects REQUESTS_CA_BUNDLE; also enable system certs as fallback
+ENV UV_NATIVE_TLS=true
 
 RUN git clone --depth 1 https://github.com/BerriAI/litellm.git /home/user/litellm \
  && git clone --depth 1 https://github.com/BerriAI/litellm-docs.git /home/user/litellm-docs \

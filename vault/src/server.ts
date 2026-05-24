@@ -321,6 +321,13 @@ const proxy = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: "ok", stubs: KV.size }));
     return;
   }
+  // Serve CA cert so sandboxes can fetch and trust it with a single curl.
+  // No auth required: the cert is public by design (it's a CA, not a key).
+  if (req.url === "/ca.crt" || req.url === "/ca.pem") {
+    res.writeHead(200, { "content-type": "application/x-pem-file" });
+    res.end(caCertPem);
+    return;
+  }
   // Debug surface: dump the in-memory ring buffer of interceptions as JSON.
   // Gated on a shared HMAC token. The CONNECT proxy binds 0.0.0.0 so any
   // pod on the cluster network can reach this port; without the gate the
