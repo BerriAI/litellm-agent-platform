@@ -302,6 +302,11 @@ export default function SessionThreadView() {
   const [sentUsers, setSentUsers] = useState<
     { text?: string; attachments?: SendMessageAttachment[] }[]
   >([]);
+  // Number of user messages that already existed in thread.messages when the
+  // FIRST send happened in this page session (i.e. historical messages from
+  // prior turns). Captured lazily on first send so we don't accidentally map
+  // sentUsers[0] onto a historical user message and wipe its text.
+  const sentUserBaseRef = useRef<number>(0);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -327,11 +332,22 @@ export default function SessionThreadView() {
   // Assistant turns + ordering come from the event stream; user messages are
   // overridden with the locally-sent copy so the harness echo can't change
   // them. In-flight prompts (echo not yet arrived) append at the end.
+  //
+  // sentUserBaseRef.current is the number of historical user messages already
+  // in the thread when the first send happened. We skip those so sentUsers[0]
+  // maps to the first NEW user message, not to a historical one.
   const messages = useMemo<LocalMessage[]>(() => {
     const base = thread.messages.map(agentToLocal);
+    const offset = sentUserBaseRef.current;
     let u = 0;
+    let historicalSeen = 0;
     for (let i = 0; i < base.length; i++) {
       if (base[i].role !== "user") continue;
+      // Skip historical user messages — they predate this session's sends.
+      if (historicalSeen < offset) {
+        historicalSeen++;
+        continue;
+      }
       if (u < sentUsers.length) {
         base[i] = {
           ...base[i],
@@ -357,6 +373,7 @@ export default function SessionThreadView() {
   // Reset the local prompt copies when switching sessions.
   useEffect(() => {
     setSentUsers([]);
+    sentUserBaseRef.current = 0;
   }, [sessionId]);
 
   // Surface any session-creation warnings (e.g. MCP tool resolution failure)
@@ -524,6 +541,14 @@ export default function SessionThreadView() {
         mime: a.mime_type,
         url: `data:${a.mime_type};base64,${a.base64}`,
       });
+    }
+    // On the very first send in this session, capture how many user messages
+    // are already in the thread (historical). sentUsers[0] should map to the
+    // NEXT user message slot, not to a historical one.
+    if (sentUsers.length === 0) {
+      sentUserBaseRef.current = thread.messages.filter(
+        (m) => m.role === "user",
+      ).length;
     }
     // Keep the exact prompt locally so it renders immediately and stays put.
     setSentUsers((prev) => [
