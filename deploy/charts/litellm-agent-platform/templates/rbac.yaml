@@ -1,0 +1,68 @@
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "litellm-agent-platform.fullname" . }}
+  namespace: {{ .Values.k8s.namespace }}
+  labels:
+    {{- include "litellm-agent-platform.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "litellm-agent-platform.fullname" . }}
+  namespace: {{ .Values.k8s.namespace }}
+  labels:
+    {{- include "litellm-agent-platform.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "litellm-agent-platform.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "litellm-agent-platform.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "litellm-agent-platform.fullname" . }}-nodes
+  labels:
+    {{- include "litellm-agent-platform.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list", "get"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "litellm-agent-platform.fullname" . }}-nodes
+  labels:
+    {{- include "litellm-agent-platform.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "litellm-agent-platform.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "litellm-agent-platform.fullname" . }}-nodes
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

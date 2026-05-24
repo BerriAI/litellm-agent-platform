@@ -1,0 +1,205 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "litellm-agent-platform.fullname" . }}-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "litellm-agent-platform.labels" . | nindent 4 }}
+    app: {{ include "litellm-agent-platform.fullname" . }}-worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "litellm-agent-platform.fullname" . }}-worker
+  template:
+    metadata:
+      labels:
+        app: {{ include "litellm-agent-platform.fullname" . }}-worker
+        {{- include "litellm-agent-platform.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "litellm-agent-platform.serviceAccountName" . }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - "npm run worker"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # -- Secrets
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: MASTER_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  {{- if (include "litellm-agent-platform.databaseExternalSecret" .) }}
+                  name: {{ include "litellm-agent-platform.databaseExternalSecret" . }}
+                  key: url
+                  {{- else }}
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: DATABASE_URL
+                  {{- end }}
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: LITELLM_API_KEY
+            - name: LITELLM_API_BASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: LITELLM_API_BASE
+            - name: CONTAINER_ENV_HARNESS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: CONTAINER_ENV_HARNESS_AUTH_TOKEN
+            # -- Config from ConfigMap
+            - name: LITELLM_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: LITELLM_DEFAULT_MODEL
+            - name: PREINSTALLED_GITHUB_REPO
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: PREINSTALLED_GITHUB_REPO
+            - name: WARM_POOL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: WARM_POOL_SIZE
+            # -- Non-secret literals
+            - name: NODE_ENV
+              value: "production"
+            - name: UI_USERNAME
+              value: {{ .Values.config.username | quote }}
+            # -- K8s sandbox backend
+            - name: K8S_NODE_HOST
+              value: {{ .Values.k8s.nodeHost | quote }}
+            - name: K8S_NAMESPACE
+              value: {{ .Values.k8s.namespace | quote }}
+            - name: K8S_NODEPORT_MIN
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: K8S_NODEPORT_MIN
+            - name: K8S_NODEPORT_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: K8S_NODEPORT_MAX
+            - name: K8S_IMAGE_PULL_POLICY
+              value: {{ .Values.k8s.imagePullPolicy | quote }}
+            # -- In-cluster auth
+            - name: IN_CLUSTER
+              value: "true"
+            - name: KUBECONFIG
+              value: ""
+            {{- if .Values.k8s.harnessImage }}
+            - name: K8S_HARNESS_IMAGE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE
+            {{- end }}
+            {{- if .Values.k8s.harnessImageOpencode }}
+            - name: K8S_HARNESS_IMAGE_OPENCODE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE_OPENCODE
+                  optional: true
+            {{- end }}
+            {{- if .Values.k8s.harnessImageClaudeSdk }}
+            - name: K8S_HARNESS_IMAGE_CLAUDE_SDK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE_CLAUDE_SDK
+                  optional: true
+            {{- end }}
+            {{- if .Values.k8s.harnessImageClaudeCode }}
+            - name: K8S_HARNESS_IMAGE_CLAUDE_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE_CLAUDE_CODE
+                  optional: true
+            {{- end }}
+            {{- if .Values.k8s.harnessImageCodex }}
+            - name: K8S_HARNESS_IMAGE_CODEX
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE_CODEX
+                  optional: true
+            {{- end }}
+            {{- if .Values.k8s.harnessImageHermes }}
+            - name: K8S_HARNESS_IMAGE_HERMES
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE_HERMES
+                  optional: true
+            {{- end }}
+            {{- if .Values.k8s.harnessImageGemini }}
+            - name: K8S_HARNESS_IMAGE_GEMINI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm-agent-platform.secretName" . }}
+                  key: K8S_HARNESS_IMAGE_GEMINI
+                  optional: true
+            {{- end }}
+            {{- if .Values.config.awsRegion }}
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "litellm-agent-platform.fullname" . }}-config
+                  key: AWS_REGION
+            {{- end }}
+            {{- range $key, $value := .Values.extraEnv }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          {{- with .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,221 @@
+# -- Number of web replicas
+replicaCount: 1
+
+image:
+  # -- Image repository
+  repository: litellm-agent-platform
+  # -- Image tag
+  tag: ""
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+# -- Override chart name
+nameOverride: ""
+# -- Override full name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount for platform pods
+  create: true
+  # -- ServiceAccount name (generated if empty)
+  name: ""
+  # -- Annotations for the ServiceAccount
+  annotations: {}
+
+# -- Priority class for platform pods (prevents sandbox preemption)
+priorityClassName: platform-critical
+
+# =========================================================================
+# Web service configuration
+# =========================================================================
+web:
+  # -- Number of web replicas
+  replicas: 1
+  # -- Container port (server-proxy.mjs listens here)
+  port: 10000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  livenessProbe:
+    tcpSocket:
+      port: 10000
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    failureThreshold: 3
+  readinessProbe:
+    tcpSocket:
+      port: 10000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+
+# =========================================================================
+# Worker configuration (reconciler)
+# =========================================================================
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# =========================================================================
+# Database migration job (runs before web/worker start)
+# =========================================================================
+migration:
+  # -- Enable migration job (Helm hook pre-install,pre-upgrade)
+  enabled: true
+  # -- Restart policy for migration job
+  restartPolicy: Never
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# =========================================================================
+# Service / Ingress
+# =========================================================================
+service:
+  type: ClusterIP
+  port: 80
+  # -- Annotations (e.g. AWS LB idle timeout for WebSocket)
+  annotations: {}
+  # service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "3600"
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  #   - host: litellm-agents.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  tls: []
+  #   - secretName: litellm-agents-tls
+  #     hosts:
+  #       - litellm-agents.example.com
+
+# =========================================================================
+# PostgreSQL
+# =========================================================================
+postgresql:
+  # -- Deploy a standalone PostgreSQL via Bitnami subchart
+  enabled: true
+  auth:
+    username: litellm
+    password: litellm
+    database: litellm_agents
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# -- Use an existing PostgreSQL (set postgresql.enabled=false)
+externalDatabase:
+  host: ""
+  port: 5432
+  username: ""
+  password: ""
+  database: litellm_agents
+  # -- Full DATABASE_URL override (takes precedence over host/port/user/pass)
+  url: ""
+  # -- Name of an existing Secret with key 'url' containing DATABASE_URL
+  existingSecret: ""
+
+# =========================================================================
+# Platform secrets (stored in a K8s Secret)
+# =========================================================================
+secrets:
+  # -- Master API key for the platform. Auto-generated if empty.
+  masterKey: ""
+  # -- LiteLLM API key
+  litellmApiKey: ""
+  # -- LiteLLM API base URL
+  litellmApiBase: ""
+  # -- Harness auth token for WebSocket sessions. Auto-generated if empty.
+  harnessAuthToken: ""
+  # -- Name of existing Secret (skips creating one)
+  existingSecret: ""
+
+# =========================================================================
+# Kubernetes sandbox backend configuration
+# =========================================================================
+k8s:
+  # -- Namespace where Sandbox CRs live (can differ from release namespace)
+  namespace: default
+  # -- Host that web container reaches k8s node on. "auto" = discover at request time.
+  nodeHost: "auto"
+  # -- NodePort range (must match --service-node-port-range on apiserver)
+  nodeportMin: "30000"
+  nodeportMax: "30099"
+  # -- Image pull policy for sandbox pods
+  imagePullPolicy: IfNotPresent
+  # -- Default sandbox harness image
+  harnessImage: ""
+  # -- Per-harness image overrides (optional, falls back to harnessImage)
+  harnessImageOpencode: ""
+  harnessImageClaudeSdk: ""
+  harnessImageClaudeCode: ""
+  harnessImageCodex: ""
+  harnessImageHermes: ""
+  harnessImageGemini: ""
+
+# =========================================================================
+# Application settings
+# =========================================================================
+config:
+  username: admin
+  defaultModel: "anthropic/claude-sonnet-4-6"
+  preinstalledRepo: "https://github.com/BerriAI/litellm"
+  warmPoolSize: "2"
+  reconcileIntervalSeconds: "60"
+  containerPort: "4096"
+  # -- Region (used for AWS EKS exec-plugin, optional)
+  awsRegion: ""
+  # -- Base URL of this deployment (for OAuth redirect_uri)
+  baseUrl: ""
+
+# =========================================================================
+# Priority classes for sandbox pods
+# =========================================================================
+priorityClasses:
+  # -- Create PriorityClasses for sandbox preemption control
+  enabled: true
+
+# =========================================================================
+# RBAC for platform pods (required for in-cluster sandbox management)
+# =========================================================================
+rbac:
+  # -- Create RBAC resources (ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding)
+  create: true
+
+# -- Node selector for platform pods
+nodeSelector: {}
+
+# -- Tolerations for platform pods
+tolerations: []
+
+# -- Affinity for platform pods
+affinity: {}
+
+# -- Extra env vars (key: value pairs added to all pods)
+extraEnv: {}
+
+# -- Extra volumes for all platform pods
+extraVolumes: []
+
+# -- Extra volume mounts for all platform pods
+extraVolumeMounts: []

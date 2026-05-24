@@ -1,0 +1,18 @@
+apiVersion: v2
+name: litellm-agent-platform
+description: Self-hosted platform for running coding agents (Claude Code, Codex, Hermes) in isolated Kubernetes sandboxes with vault proxy
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/BerriAI/litellm-agent-platform
+sources:
+  - https://github.com/BerriAI/litellm-agent-platform
+maintainers:
+  - name: community
+keywords:
+  - litellm
+  - agents
+  - claude-code
+  - codex
+  - sandbox
+  - kubernetes

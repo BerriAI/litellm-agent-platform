@@ -1,0 +1,25 @@
+{{- if .Values.priorityClasses.enabled }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-critical
+value: 2000000
+globalDefault: false
+description: "Platform web + worker — never preempted by sandbox pods."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: sandbox-active
+value: 1000
+globalDefault: false
+description: "Active session sandbox pods — preempt warm pods under pressure."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: sandbox-warm
+value: 100
+globalDefault: false
+description: "Warm pool sandbox pods — low priority, evicted first under pressure."
+{{- end }}
