@@ -95,24 +95,35 @@ export async function provisionSandbox(
   return `sandbox '${name}' ready`;
 }
 
+/**
+ * Resolve a provisioned sandbox's URL (`scheme://id` or an http URL). Falls
+ * back to the DB-persisted map when the in-process cache was wiped by a pod
+ * restart. Returns null when the sandbox was never provisioned.
+ */
+async function resolveSandboxUrl(
+  session_id: string,
+  name: string,
+): Promise<string | null> {
+  const cached = sandboxMap.get(mapKey(session_id, name));
+  if (cached) return cached;
+  const row = await (prisma.session.findUnique as (args: unknown) => Promise<Record<string, unknown> | null>)({
+    where: { session_id },
+    select: { sandboxes: true },
+  });
+  const stored = (row?.sandboxes as Record<string, string> | null)?.[name];
+  if (stored) {
+    sandboxMap.set(mapKey(session_id, name), stored);
+    return stored;
+  }
+  return null;
+}
+
 export async function executeSandbox(
   session_id: string,
   name: string,
   cmd: string,
 ): Promise<string> {
-  let sandbox_url = sandboxMap.get(mapKey(session_id, name));
-  if (!sandbox_url) {
-    // Cold path: pod restarted and wiped in-memory map. Rehydrate from DB.
-    const row = await (prisma.session.findUnique as (args: unknown) => Promise<Record<string, unknown> | null>)({
-      where: { session_id },
-      select: { sandboxes: true },
-    });
-    const stored = (row?.sandboxes as Record<string, string> | null)?.[name];
-    if (stored) {
-      sandboxMap.set(mapKey(session_id, name), stored);
-      sandbox_url = stored;
-    }
-  }
+  const sandbox_url = await resolveSandboxUrl(session_id, name);
   if (!sandbox_url) {
     return `error: sandbox '${name}' not provisioned — call provision first`;
   }
@@ -140,6 +151,42 @@ export async function executeSandbox(
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
+}
+
+// Cap on inline file content so a large file can't blow up the agent context.
+const READ_FILE_MAX_BYTES = 256 * 1024;
+
+/**
+ * Read a file out of a provisioned sandbox and return its text content. Lets
+ * the agent pull files from the sandbox into its own workspace without
+ * `cat`/base64 gymnastics. Registry providers (E2B) use their native file API;
+ * the http-executor path falls back to `cat`.
+ */
+export async function readSandboxFile(
+  session_id: string,
+  name: string,
+  path: string,
+): Promise<string> {
+  const sandbox_url = await resolveSandboxUrl(session_id, name);
+  if (!sandbox_url) {
+    return `error: sandbox '${name}' not provisioned — call provision first`;
+  }
+
+  const registry = getRegistry();
+  const scheme = sandbox_url.split("://")[0];
+  let content: string;
+  if (scheme && scheme in registry) {
+    const id = sandbox_url.slice(scheme.length + 3);
+    content = await registry[scheme].readFile(id, path);
+  } else {
+    // http executor has no file API — fall back to `cat` (text only).
+    content = await executeSandbox(session_id, name, `cat -- ${JSON.stringify(path)}`);
+  }
+
+  if (content.length > READ_FILE_MAX_BYTES) {
+    return `error: file too large to return inline (${content.length} bytes > ${READ_FILE_MAX_BYTES}). Read a smaller slice (e.g. head/tail) or split it.`;
+  }
+  return content;
 }
 
 export function getSandboxUrl(
