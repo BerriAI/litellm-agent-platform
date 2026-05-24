@@ -1,0 +1,34 @@
+# Self-contained opencode harness — built directly by Render from the repo
+# (no prebuilt base image, no ECR). Auto-rebuilds on push to the service branch.
+#
+# Render service config: runtime=docker, dockerfilePath=harnesses/opencode/Dockerfile.render,
+# dockerContext=. (repo root). Render injects PORT (10000).
+#
+# Leaner than harnesses/base + harnesses/opencode/Dockerfile: only the tools the
+# entrypoint actually needs (git clone, opencode, node for the MCP servers).
+# Runs as root — fine for a single-tenant inline service, and avoids the
+# /var/log-style permission pitfalls of an unprivileged user.
+FROM node:20-bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates bash curl jq unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# opencode CLI (same install path as harnesses/opencode/Dockerfile).
+RUN curl -fsSL https://opencode.ai/install | bash
+ENV PATH="/root/.opencode/bin:${PATH}"
+
+# Shared + opencode entrypoints.
+COPY harnesses/_shared/entrypoint-common.sh /opt/lap/common.sh
+COPY harnesses/opencode/entrypoint.sh /entrypoint.sh
+RUN chmod +x /opt/lap/common.sh /entrypoint.sh
+
+# Sandbox MCP server, MCP-config generator, + their node_modules.
+COPY harnesses/opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
+COPY harnesses/opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
+COPY harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
+RUN cd /opt/lap/opencode-sandbox-mcp && npm install --omit=dev --no-audit --no-fund
+
+WORKDIR /work
+EXPOSE 10000
+ENTRYPOINT ["/entrypoint.sh"]
