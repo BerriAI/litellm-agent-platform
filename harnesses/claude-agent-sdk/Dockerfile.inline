@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1.7
+#
+# Self-contained Claude Agent SDK harness.
+# Build from repo root — no pre-built base image required:
+#
+#   docker build -f harnesses/claude-agent-sdk/Dockerfile.inline -t claude-agent-sdk-inline .
+#
+# On Render, set:
+#   dockerfilePath = harnesses/claude-agent-sdk/Dockerfile.inline
+#   dockerContext  = .
+
+FROM node:20-bookworm-slim AS builder
+
+WORKDIR /build
+
+# Build managed-tools (local workspace dep used by the harness)
+COPY managed-tools/package*.json ./managed-tools/
+RUN cd managed-tools && npm install
+COPY managed-tools/ ./managed-tools/
+RUN cd managed-tools && npm run build
+
+# Install harness deps — explicitly include linux-x64 claude binary
+COPY harnesses/claude-agent-sdk/package*.json ./harnesses/claude-agent-sdk/
+RUN cd harnesses/claude-agent-sdk && \
+    npm install --legacy-peer-deps && \
+    # Force-install the linux-x64 native claude binary (optional dep may be skipped)
+    # Install BOTH arch variants so runtime can pick the right one regardless of platform
+    npm install --cpu=x64 --os=linux --legacy-peer-deps \
+        @anthropic-ai/claude-agent-sdk-linux-x64@0.2.138 && \
+    npm install --cpu=arm64 --os=linux --legacy-peer-deps \
+        @anthropic-ai/claude-agent-sdk-linux-arm64@0.2.138 && \
+    chmod +x node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude \
+              node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude && \
+    echo "x64 binary:" && ls -la node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude && \
+    echo "arm64 binary:" && ls -la node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude
+
+# Build TypeScript — ARG forces cache bust when source changes
+ARG BUILD_TIMESTAMP=unknown
+COPY harnesses/claude-agent-sdk/src/ ./harnesses/claude-agent-sdk/src/
+COPY harnesses/claude-agent-sdk/tsconfig*.json ./harnesses/claude-agent-sdk/
+RUN echo "build at $BUILD_TIMESTAMP" && cd harnesses/claude-agent-sdk && npm run build
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+FROM node:20-bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates curl bash jq \
+      libstdc++6 libc6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 2>/dev/null || true
+
+# Mirror the builder's directory structure so the file: symlink
+# node_modules/@lap/managed-tools → ../../../../managed-tools resolves correctly.
+WORKDIR /build/harnesses/claude-agent-sdk
+
+COPY --from=builder /build/managed-tools/ /build/managed-tools/
+COPY --from=builder /build/harnesses/claude-agent-sdk/dist/ ./dist/
+COPY --from=builder /build/harnesses/claude-agent-sdk/node_modules/ ./node_modules/
+
+# Verify the claude binary is executable
+RUN file ./node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude && \
+    ldd ./node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude 2>&1 | head -20 || true
+
+# Pick the right arch binary at runtime and copy to /usr/local/bin/claude
+RUN ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') && \
+    echo "Runtime arch: $ARCH" && \
+    cp /build/harnesses/claude-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk-linux-${ARCH}/claude /usr/local/bin/claude && \
+    chmod +x /usr/local/bin/claude && \
+    /usr/local/bin/claude --version 2>&1 | head -2 || echo "WARNING: claude --version failed (may need missing libs)"
+
+ENV CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
+ENV PORT=10000
+EXPOSE 10000
+
+CMD ["node", "dist/server.js"]
