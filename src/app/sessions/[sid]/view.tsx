@@ -634,6 +634,14 @@ export default function SessionThreadView() {
         onClose={() => setInspectorOpen(false)}
         sessionId={sessionId}
         harnessSessionId={session?.harness_session_id}
+        skills={(agent?.attached_skill_ids ?? [])
+          .map((id) => skills.find((s) => s.id === id))
+          .filter((s): s is SkillRow => Boolean(s))
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+          }))}
       />
     </div>
     </SubThreadsContext.Provider>

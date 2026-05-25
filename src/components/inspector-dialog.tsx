@@ -8,13 +8,28 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Activity, ChevronRight, X } from "lucide-react";
+import {
+  Activity,
+  ChevronRight,
+  Plug,
+  Sparkles,
+  Wrench,
+  X,
+} from "lucide-react";
 
 import { browserOpencodeClient } from "@/lib/opencode-client";
 
 interface OcEvent {
   type: string;
   properties?: Record<string, unknown>;
+}
+
+/** Skill loaded into the session — passed in from the session view, which
+ * already resolves the agent's `attached_skill_ids` against the catalog. */
+export interface LoadedSkill {
+  id: string;
+  name: string;
+  description?: string | null;
 }
 
 interface Frame {
@@ -132,17 +147,194 @@ function EventRow({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Context tab — what's wired into this session right now: MCP servers (live
+// connection status), the tool palette the agent can call, and attached skills.
+// ---------------------------------------------------------------------------
+
+interface McpServer {
+  name: string;
+  status: string;
+}
+
+function statusDot(status: string): string {
+  if (status === "connected") return "bg-emerald-500";
+  if (status === "failed" || status === "error") return "bg-red-500";
+  return "bg-gray-300";
+}
+
+function SectionHeader({
+  icon,
+  label,
+  count,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 pt-3 pb-1.5 text-[11px] font-medium text-gray-700">
+      {icon}
+      <span>{label}</span>
+      <span className="font-mono text-gray-400">{count}</span>
+    </div>
+  );
+}
+
+function ContextView({
+  sessionId,
+  harnessSessionId,
+  skills,
+}: {
+  sessionId: string;
+  harnessSessionId?: string | null;
+  skills: LoadedSkill[];
+}) {
+  const [servers, setServers] = useState<McpServer[] | null>(null);
+  const [tools, setTools] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // No harness yet (session still creating, or failed before bring-up) —
+    // there's nothing to query. Surface that instead of spinning forever.
+    if (!sessionId || !harnessSessionId) {
+      setError("no harness session — context unavailable");
+      return;
+    }
+    let cancelled = false;
+    // Clear any stale "no harness" message once the harness is available.
+    setError(null);
+    const oc = browserOpencodeClient(sessionId);
+    void (async () => {
+      try {
+        const [mcpRes, toolRes] = await Promise.all([
+          oc.mcp.status(),
+          oc.tool.ids(),
+        ]);
+        if (cancelled) return;
+        const mcpData = (mcpRes.data ?? {}) as Record<
+          string,
+          { status?: string }
+        >;
+        setServers(
+          Object.entries(mcpData)
+            .map(([name, v]) => ({ name, status: v?.status ?? "unknown" }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        );
+        setTools(((toolRes.data ?? []) as string[]).slice().sort());
+      } catch {
+        if (!cancelled) setError("could not reach the harness");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, harnessSessionId]);
+
+  const loading = servers === null && tools === null && !error;
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100">
+      {error && (
+        <div className="p-3 text-[11px] text-red-500">{error}</div>
+      )}
+      {loading && (
+        <div className="p-3 text-[11px] text-gray-400">loading context…</div>
+      )}
+
+      {/* MCP servers */}
+      <section>
+        <SectionHeader
+          icon={<Plug className="size-3.5 text-gray-500" />}
+          label="MCP servers"
+          count={servers?.length ?? 0}
+        />
+        {servers && servers.length === 0 && (
+          <div className="px-3 pb-2 text-[11px] text-gray-400">
+            no MCP servers connected
+          </div>
+        )}
+        {servers?.map((s) => (
+          <div
+            key={s.name}
+            className="flex items-center gap-2 px-3 py-1 text-[11px]"
+          >
+            <span
+              className={`size-1.5 rounded-full shrink-0 ${statusDot(s.status)}`}
+            />
+            <span className="font-mono text-gray-700 truncate">{s.name}</span>
+            <span className="ml-auto font-mono text-[10px] text-gray-400">
+              {s.status}
+            </span>
+          </div>
+        ))}
+      </section>
+
+      {/* Tools */}
+      <section>
+        <SectionHeader
+          icon={<Wrench className="size-3.5 text-gray-500" />}
+          label="Tools"
+          count={tools?.length ?? 0}
+        />
+        {tools && tools.length === 0 && (
+          <div className="px-3 pb-2 text-[11px] text-gray-400">
+            no tools available
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1 px-3 pb-2">
+          {tools?.map((t) => (
+            <span
+              key={t}
+              className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      {/* Skills */}
+      <section>
+        <SectionHeader
+          icon={<Sparkles className="size-3.5 text-gray-500" />}
+          label="Skills"
+          count={skills.length}
+        />
+        {skills.length === 0 && (
+          <div className="px-3 pb-2 text-[11px] text-gray-400">
+            no skills attached
+          </div>
+        )}
+        {skills.map((sk) => (
+          <div key={sk.id} className="px-3 py-1">
+            <div className="font-mono text-[11px] text-gray-700">{sk.name}</div>
+            {sk.description && (
+              <div className="text-[10.5px] text-gray-400 truncate">
+                {sk.description}
+              </div>
+            )}
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
 export function InspectorPanel({
   open,
   onClose,
   sessionId,
   harnessSessionId,
+  skills = [],
 }: {
   open: boolean;
   onClose: () => void;
   sessionId: string;
   harnessSessionId?: string | null;
+  skills?: LoadedSkill[];
 }) {
+  const [tab, setTab] = useState<"events" | "context">("events");
   const [frames, setFrames] = useState<Frame[]>([]);
   const [hideHeartbeat, setHideHeartbeat] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -193,12 +385,34 @@ export function InspectorPanel({
   return (
     <aside className="flex flex-col h-full min-h-0 border-l border-gray-200 bg-white w-[560px] shrink-0">
       <header className="flex items-center gap-2 px-4 py-2 border-b border-gray-200">
-        <Activity className="size-3.5 text-gray-500" />
-        <span className="text-[13px] font-medium text-gray-800">
-          opencode events
-        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setTab("events")}
+            className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-[12px] font-medium ${
+              tab === "events"
+                ? "bg-gray-100 text-gray-800"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            <Activity className="size-3.5" />
+            Events
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("context")}
+            className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-[12px] font-medium ${
+              tab === "context"
+                ? "bg-gray-100 text-gray-800"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            <Plug className="size-3.5" />
+            Context
+          </button>
+        </div>
         <span className="font-mono text-[11px] text-gray-400">
-          session {sessionId.slice(0, 8)}…
+          {sessionId.slice(0, 8)}…
         </span>
         <button
           type="button"
@@ -210,44 +424,59 @@ export function InspectorPanel({
         </button>
       </header>
 
-      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-gray-200 bg-gray-50/50 text-[11px]">
-        <label className="inline-flex items-center gap-1.5 text-gray-600">
-          <input
-            type="checkbox"
-            checked={hideHeartbeat}
-            onChange={(e) => setHideHeartbeat(e.target.checked)}
-            className="size-3"
-          />
-          hide heartbeats
-        </label>
-        <button
-          type="button"
-          onClick={() => setFrames([])}
-          className="text-gray-500 hover:text-gray-800 underline-offset-2 hover:underline"
-        >
-          clear
-        </button>
-        <span className="ml-auto text-gray-400 font-mono">
-          {shown.length} events
-        </span>
-      </div>
-
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-        {shown.map((f, i) => (
-          <EventRow key={i} frame={f} currentSid={harnessSessionId} />
-        ))}
-        {shown.length === 0 && (
-          <div className="p-3 text-[11px] text-gray-400 text-center leading-relaxed">
-            subscribed to the opencode /event bus
-            <br />
-            events appear as the agent loop emits them
+      {tab === "events" ? (
+        <>
+          <div className="flex items-center gap-3 px-4 py-1.5 border-b border-gray-200 bg-gray-50/50 text-[11px]">
+            <label className="inline-flex items-center gap-1.5 text-gray-600">
+              <input
+                type="checkbox"
+                checked={hideHeartbeat}
+                onChange={(e) => setHideHeartbeat(e.target.checked)}
+                className="size-3"
+              />
+              hide heartbeats
+            </label>
+            <button
+              type="button"
+              onClick={() => setFrames([])}
+              className="text-gray-500 hover:text-gray-800 underline-offset-2 hover:underline"
+            >
+              clear
+            </button>
+            <span className="ml-auto text-gray-400 font-mono">
+              {shown.length} events
+            </span>
           </div>
-        )}
-      </div>
 
-      <footer className="px-4 py-1.5 border-t border-gray-200 text-[10px] text-gray-400 font-mono">
-        GET /sessions/:id/opencode/event
-      </footer>
+          <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+            {shown.map((f, i) => (
+              <EventRow key={i} frame={f} currentSid={harnessSessionId} />
+            ))}
+            {shown.length === 0 && (
+              <div className="p-3 text-[11px] text-gray-400 text-center leading-relaxed">
+                subscribed to the opencode /event bus
+                <br />
+                events appear as the agent loop emits them
+              </div>
+            )}
+          </div>
+
+          <footer className="px-4 py-1.5 border-t border-gray-200 text-[10px] text-gray-400 font-mono">
+            GET /sessions/:id/opencode/event
+          </footer>
+        </>
+      ) : (
+        <>
+          <ContextView
+            sessionId={sessionId}
+            harnessSessionId={harnessSessionId}
+            skills={skills}
+          />
+          <footer className="px-4 py-1.5 border-t border-gray-200 text-[10px] text-gray-400 font-mono">
+            GET /sessions/:id/opencode/mcp · /tool/ids
+          </footer>
+        </>
+      )}
     </aside>
   );
 }
