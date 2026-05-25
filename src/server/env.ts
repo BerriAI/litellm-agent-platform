@@ -88,6 +88,12 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(24),
+
+  // S3 artifact storage configuration — required for agents to return files.
+  // Only "s3" is currently supported (no fallback to in-memory).
+  ARTIFACT_STORAGE: z.enum(["s3"]),
+  AWS_S3_BUCKET: z.string().min(1),
+  AWS_REGION: z.string().default("us-east-1"),
 });
 
 function collectContainerEnvPassthrough(
