@@ -78,7 +78,12 @@ RUN cd /home/user/litellm \
 # the proxy still fetches on first start — we just lose the pre-warm.
 RUN su -c "cd /home/user/litellm && python -m prisma py fetch" user \
  || echo "[build] prisma py fetch failed — engines will download on first start"
-RUN su -c "cd /home/user/litellm && python -m prisma generate --schema schema.prisma" user \
+# Generate as ROOT (not `user`): the client is written into the global
+# site-packages (root-owned at build), so a `user` run can't write it and the
+# step silently skipped — leaving the proxy to crash in _setup_prisma_client on
+# first boot. (At runtime e2b chmods /usr/local 777, which is why a manual user
+# `prisma generate` works then — but we want it baked.)
+RUN cd /home/user/litellm && python -m prisma generate --schema schema.prisma \
  || echo "[build] prisma generate skipped — runs on first start"
 
 # ── Playwright + Chromium (for in-sandbox UI screenshots) ──────────────────────
@@ -90,6 +95,14 @@ RUN pip install --no-cache-dir playwright \
  && python -m playwright install-deps chromium \
  && mkdir -p /opt/ms-playwright && chown -R user:user /opt/ms-playwright \
  && su -c "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright python -m playwright install chromium" user
+
+# ── Drop the apt-created system cluster ────────────────────────────────────────
+# `apt install postgresql` auto-creates a system cluster (<ver> main) that
+# auto-starts on 5432 at sandbox boot and collides with our user-owned
+# /home/user/pgdata cluster below — litellm then connects to the wrong one
+# (no `litellm` role / password) and fails with P1000. Remove it so 5432 belongs
+# solely to our cluster.
+RUN VER=$(ls /usr/lib/postgresql | sort -V | tail -1); pg_dropcluster --stop "$VER" main 2>/dev/null || true
 
 # ── PostgreSQL dev cluster ────────────────────────────────────────────────────
 # Cluster owned by `user` (not the postgres system account) so dev-up.sh can
