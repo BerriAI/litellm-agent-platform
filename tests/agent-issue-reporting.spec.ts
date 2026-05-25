@@ -125,9 +125,14 @@ test.describe.serial("agent issue reporting — implicit behavior", () => {
     console.log(`Agent filed issue: "${jiraIssueTitle}"`);
   }, TURN_TIMEOUT_MS + 30_000);
 
-  test("3. same title via API → times_seen=2, one row", async () => {
-    // Dedup is a platform behavior: same title (case-insensitive) → increment, not new row.
-    // Test via direct API POST rather than a second agent session (agents vary their title wording).
+  let baseTimesSeen = 0;
+
+  test("3. same title via API increments times_seen by 1", async () => {
+    // Record current count before posting — prior test runs may have accumulated occurrences.
+    const before = await getOpenIssues();
+    const beforeRow = before.find((i) => i.title === jiraIssueTitle);
+    baseTimesSeen = (beforeRow?.times_seen as number) ?? 1;
+
     await fetch(`${BASE_URL}/api/v1/managed_agents/agents/${AGENT_ID}/issues`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${MASTER_KEY}` },
@@ -137,12 +142,12 @@ test.describe.serial("agent issue reporting — implicit behavior", () => {
     const issues = await getOpenIssues();
     const deduped = issues.find((i) => i.title === jiraIssueTitle);
     expect(deduped, "should still be one row").toBeDefined();
-    expect(deduped!.times_seen).toBe(2);
+    expect(deduped!.times_seen).toBe(baseTimesSeen + 1);
     const comments = (deduped!.comments as unknown[]) ?? [];
     expect(comments.length).toBeGreaterThanOrEqual(1);
   }, 15_000);
 
-  test("4. same title again → times_seen=3", async () => {
+  test("4. same title again → times_seen increments again", async () => {
     await fetch(`${BASE_URL}/api/v1/managed_agents/agents/${AGENT_ID}/issues`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${MASTER_KEY}` },
@@ -151,7 +156,7 @@ test.describe.serial("agent issue reporting — implicit behavior", () => {
 
     const issues = await getOpenIssues();
     const deduped = issues.find((i) => i.title === jiraIssueTitle);
-    expect(deduped!.times_seen).toBe(3);
+    expect(deduped!.times_seen).toBe(baseTimesSeen + 2);
     const comments = (deduped!.comments as unknown[]) ?? [];
     expect(comments.length).toBeGreaterThanOrEqual(2);
   }, 15_000);
@@ -167,9 +172,10 @@ test.describe.serial("agent issue reporting — implicit behavior", () => {
     // Issues list — networkidle ensures the API fetch completes before asserting
     await page.goto(`${BASE_URL}/agents/${AGENT_ID}/issues`, { waitUntil: "networkidle", timeout: 20000 });
     await page.waitForTimeout(1000);
-    // Find the row for this specific issue and check it has ×3 badge
+    // Find the row for this specific issue and check it has an occurrence badge (×N, N ≥ 2)
     const issueRow = page.locator(`tr:has-text("${jiraIssueTitle}")`).first();
-    await expect(issueRow.locator("text=×3")).toBeVisible();
+    const expectedBadge = `×${baseTimesSeen + 2}`;
+    await expect(issueRow.locator(`text=${expectedBadge}`)).toBeVisible();
 
     // Click into detail
     await issueRow.click();
