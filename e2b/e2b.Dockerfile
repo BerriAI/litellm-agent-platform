@@ -67,9 +67,19 @@ RUN git clone --depth 1 https://github.com/BerriAI/litellm.git /home/user/litell
 # ── Pre-install proxy deps ─────────────────────────────────────────────────────
 # Done at image-build time so agents never wait for a 200-package install.
 # Editable install (-e) means git-pull/branch-switch reflects live without reinstall.
-# Prisma binary is also downloaded here via post-install hook.
+# `prisma` is installed explicitly — litellm[proxy] does NOT pull it in, but the
+# proxy imports it, so a fresh sandbox would otherwise fail at startup.
 RUN cd /home/user/litellm \
- && pip install --no-cache-dir -e ".[proxy]"
+ && pip install --no-cache-dir -e ".[proxy]" prisma
+
+# ── Pre-fetch Prisma engines + client (the ~150 MiB first-boot download) ───────
+# Run as `user` so the binaries land in /home/user/.cache/prisma-python (the
+# sandbox runs as `user`). Best-effort: if the engine CDN is unreachable at build
+# the proxy still fetches on first start — we just lose the pre-warm.
+RUN su -c "cd /home/user/litellm && python -m prisma py fetch" user \
+ || echo "[build] prisma py fetch failed — engines will download on first start"
+RUN su -c "cd /home/user/litellm && python -m prisma generate --schema schema.prisma" user \
+ || echo "[build] prisma generate skipped — runs on first start"
 
 # ── PostgreSQL dev cluster ────────────────────────────────────────────────────
 # Cluster owned by `user` (not the postgres system account) so dev-up.sh can
@@ -105,9 +115,23 @@ ENV STORE_MODEL_IN_DB=True
 # dev-up:   source it for an interactive shell → starts postgres + exports env.
 COPY start-db.sh /usr/local/bin/start-db
 COPY dev-up.sh /usr/local/bin/dev-up
-RUN chmod +x /usr/local/bin/start-db /usr/local/bin/dev-up
+# litellm-up: one command to boot the proxy on a free port and block until
+# /health/readiness == 200 (prints PORT + master key), or exit non-zero with
+# log + OOM diagnostics. See e2b/litellm-up.sh.
+COPY litellm-up.sh /usr/local/bin/litellm-up
+RUN chmod +x /usr/local/bin/start-db /usr/local/bin/dev-up /usr/local/bin/litellm-up
 
-RUN chown -R user:user /home/user/litellm /home/user/litellm-docs
+# Pre-seeded minimal proxy config (master_key from env; models live in the DB).
+COPY litellm_config.yaml /tmp/litellm_config.yaml
+
+# Document the pre-clone so agents use it instead of re-cloning. Captures the
+# exact branch + commit baked into THIS image at build time.
+RUN printf '# LiteLLM checkout (pre-baked in the e2b template)\n\nThis repo is pre-cloned and `pip install -e ".[proxy]"` is already done.\n**Use it — do not re-clone.**\n\n- branch: %s\n- commit: %s\n\n## Start the proxy\n\n    litellm-up            # starts postgres + proxy on a FREE port; prints PORT + MASTER_KEY when ready\n\nMaster key: `sk-1234`. DB + DATABASE_URL are pre-provisioned. Never hardcode port 4000 — use the PORT litellm-up prints.\n' \
+      "$(git -C /home/user/litellm rev-parse --abbrev-ref HEAD)" \
+      "$(git -C /home/user/litellm rev-parse HEAD)" \
+      > /home/user/litellm/AGENTS.md
+
+RUN chown -R user:user /home/user/litellm /home/user/litellm-docs /tmp/litellm_config.yaml
 
 # Drop back to `user` (we switched to root on line 12). The sandbox runs as
 # `user`, and postgres' pg_ctl refuses to run as root — so the start_cmd needs
