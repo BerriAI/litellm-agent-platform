@@ -32,6 +32,13 @@ app.get("/health", (c) => {
   return c.json({ ok: true });
 });
 
+// Block commands that attempt to unset or clear the vault proxy env vars.
+const PROXY_TAMPER_RE = /unset\s+(https?_proxy|HTTPS?_PROXY)\b/i;
+
+function rejectsProxyTamper(cmd: string): boolean {
+  return PROXY_TAMPER_RE.test(cmd);
+}
+
 app.post("/execute", async (c) => {
   const token = c.req.header("x-executor-secret");
   if (!checkSecret(token)) {
@@ -39,6 +46,11 @@ app.post("/execute", async (c) => {
   }
 
   const { cmd } = await c.req.json<{ cmd: string }>();
+
+  if (rejectsProxyTamper(cmd)) {
+    return c.json({ error: "command blocked: proxy env vars cannot be unset" }, 403);
+  }
+
   const cwd = process.env.REPO_DIR ?? undefined;
 
   try {
