@@ -489,7 +489,7 @@ async function finishBringUp(
 // last_seen_at heartbeat cadence while the initial agent task runs. Must stay
 // comfortably below SESSION_IDLE_TIMEOUT_MS (reconcile.ts) so an in-flight turn
 // is never mistaken for an idle session by the reconciler.
-const INITIAL_TASK_HEARTBEAT_MS = 60_000;
+const INITIAL_TASK_HEARTBEAT_MS = 15_000;
 
 // Snapshot the live harness thread into Session.history so the chat can render
 // the conversation even after the sandbox is reaped. Automation runs and any

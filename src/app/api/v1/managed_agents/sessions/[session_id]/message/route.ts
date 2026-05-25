@@ -92,13 +92,16 @@ async function persistHistorySnapshot(opts: {
   }
 }
 
-// last_seen_at heartbeat cadence while a message turn runs. Must stay
-// comfortably below SESSION_IDLE_TIMEOUT_MS so the reconciler never mistakes
-// an in-flight turn for an idle session. Writes directly to prisma — not the
-// batched markSessionSeen queue — so the flush is guaranteed every interval.
-const MESSAGE_HEARTBEAT_MS = 60_000;
+// Heartbeat cadence while a message turn runs. Short enough that a long
+// autonomous turn (10-30 min) checkpoints frequently — both for the reconciler's
+// idle timeout and for mid-turn debug visibility if the agent dies.
+const MESSAGE_HEARTBEAT_MS = 15_000;
 
-function startHeartbeat(session_id: string): NodeJS.Timeout {
+function startHeartbeat(
+  session_id: string,
+  sandbox_url: string,
+  harness_session_id: string,
+): NodeJS.Timeout {
   const t = setInterval(() => {
     void prisma.session
       .update({ where: { session_id }, data: { last_seen_at: new Date() } })
@@ -107,6 +110,10 @@ function startHeartbeat(session_id: string): NodeJS.Timeout {
           `message heartbeat failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
+    // Snapshot the live thread mid-turn so autonomous long-running turns
+    // (10-30 min) leave a partial record in the DB every 15s. Without this,
+    // a dead pod mid-task leaves nothing to debug.
+    void persistHistorySnapshot({ session_id, sandbox_url, harness_session_id });
   }, MESSAGE_HEARTBEAT_MS);
   if (typeof t.unref === "function") t.unref();
   return t;
@@ -207,7 +214,7 @@ async function recoverAndResend(opts: {
   }
 
   console.log(`[message] session=${session_id} recovery=complete sandbox_url=${recovered.sandbox_url} harness_session_id=${recovered.harness_session_id}`);
-  const hb = startHeartbeat(session_id);
+  const hb = startHeartbeat(session_id, recovered.sandbox_url, recovered.harness_session_id);
   let response: HarnessMessageResponse;
   try {
     response = await harnessSendMessage({
@@ -288,7 +295,7 @@ export async function POST(req: Request, ctx: RouteContext) {
 
     let response: HarnessMessageResponse;
     console.log(`[message] session=${session_id} sandbox_url=${cached.sandbox_url} harness_session_id=${cached.harness_session_id}`);
-    const hb = startHeartbeat(session_id);
+    const hb = startHeartbeat(session_id, cached.sandbox_url, cached.harness_session_id);
     try {
       response = await harnessSendMessage({
         sandbox_url: cached.sandbox_url,
