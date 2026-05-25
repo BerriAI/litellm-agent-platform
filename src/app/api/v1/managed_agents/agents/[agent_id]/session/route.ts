@@ -28,6 +28,7 @@
  */
 
 import { assertAuth } from "@/server/auth";
+import { mintAgentAccessToken } from "@/server/auth/agent-token";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { parseAttachedSkillIds } from "@/server/skill-prompt";
@@ -112,9 +113,15 @@ interface BringUpBody {
 
 async function resolveAgentMcpServers(
   serverIds: string[],
+  session_id: string,
+  agent_id: string,
 ): Promise<{ specs: HarnessMcpServerSpec[]; warning: string | null }> {
   if (!serverIds || serverIds.length === 0) return { specs: [], warning: null };
   const litellmBase = env.LITELLM_API_BASE.replace(/\/+$/, "");
+  const lapBase = (env.LAP_BASE_URL || process.env.BASE_URL || "").replace(/\/+$/, "");
+  if (!lapBase) {
+    return { specs: [], warning: "MCP tools omitted — LAP_BASE_URL/BASE_URL not set, can't build the platform broker URL." };
+  }
   try {
     const res = await fetch(`${litellmBase}/v1/mcp/server`, {
       headers: { Authorization: `Bearer ${env.LITELLM_API_KEY}` },
@@ -130,6 +137,14 @@ async function resolveAgentMcpServers(
       alias?: string;
     }>;
     const byId = new Map(servers.map((s) => [s.server_id, s]));
+    // One scoped token for all of this session's brokered MCP calls. It only
+    // works against the LAP platform's /sessions/{id}/mcp/* broker — never the
+    // gateway directly — so the gateway key never reaches the agent. TTL is
+    // aligned to the sandbox's max lifetime (24h, the e2b timeout) so MCP tools
+    // don't start 401-ing 15 min into a long session; the token is read-scoped
+    // to one agent's own brokered MCP servers, so a longer life is low-risk.
+    const MCP_TOKEN_TTL_SEC = 24 * 60 * 60;
+    const token = mintAgentAccessToken({ agent_id, scope: ["mcp"], ttl_sec: MCP_TOKEN_TTL_SEC });
     const specs: HarnessMcpServerSpec[] = [];
     for (const id of serverIds) {
       const s = byId.get(id);
@@ -137,8 +152,9 @@ async function resolveAgentMcpServers(
       const name = s.alias || s.server_name;
       specs.push({
         name,
-        url: `${litellmBase}/mcp/${encodeURIComponent(name)}`,
+        url: `${lapBase}/api/v1/managed_agents/sessions/${encodeURIComponent(session_id)}/mcp/${encodeURIComponent(name)}`,
         transport: "http",
+        auth_token: token,
       });
     }
     return { specs, warning: null };
@@ -414,7 +430,7 @@ async function finishBringUp(
   const rawMcpServerIds = Array.isArray(agent.mcp_servers)
     ? (agent.mcp_servers as unknown[]).filter((v): v is string => typeof v === "string")
     : [];
-  const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
+  const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds, session_id, agent.agent_id);
   if (mcpWarning) console.warn(`finishBringUp session_id=${session_id}: ${mcpWarning}`);
 
   const harness_session_id = await harnessCreateSession({
@@ -716,7 +732,8 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
     const rawMcpServerIds = Array.isArray(agent.mcp_servers)
       ? (agent.mcp_servers as unknown[]).filter((v): v is string => typeof v === "string")
       : [];
-    const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
+    const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds, session.session_id, agent.agent_id);
+    if (mcpWarning) console.warn(`inline session_id=${session.session_id}: ${mcpWarning}`);
 
     // Skills for an inline session: the per-session skill_ids PLUS the agent's
     // attached skills. On the pod-per-session path the latter ride along in

@@ -892,6 +892,13 @@ export interface HarnessMcpServerSpec {
   url: string;
   /** MCP transport type passed to the Claude Agent SDK. Default "sse". */
   transport?: "sse" | "http";
+  /**
+   * Bearer token the harness sends to this MCP URL. For platform-brokered
+   * servers this is a scoped per-agent token (NOT the gateway key) — the
+   * platform holds the real key and proxies to the gateway server-side. When
+   * absent the harness falls back to its LITELLM_API_KEY (legacy direct mode).
+   */
+  auth_token?: string;
 }
 
 export interface HarnessCreateSessionOpts {

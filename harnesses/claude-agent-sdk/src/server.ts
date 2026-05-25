@@ -142,6 +142,9 @@ interface ManagedMcpServer {
   name: string;
   url: string;
   transport?: "sse" | "http";
+  /** Per-server bearer (platform-brokered: a scoped session token, not the
+   * gateway key). Falls back to LITELLM_API_KEY only if absent (legacy). */
+  auth_token?: string;
 }
 
 interface Session {
@@ -333,8 +336,11 @@ async function runTurn(
     Object.fromEntries(
       s.mcp_servers.map((m) => {
         const transport = m.transport ?? "sse";
-        const headers = litellmKey
-          ? { "Authorization": `Bearer ${litellmKey}` }
+        // Prefer the per-server scoped token (platform-brokered URL); fall back
+        // to LITELLM_API_KEY only for legacy direct-gateway specs without one.
+        const bearer = m.auth_token || litellmKey;
+        const headers = bearer
+          ? { "Authorization": `Bearer ${bearer}` }
           : undefined;
         if (transport === "http") {
           const cfg: import("@anthropic-ai/claude-agent-sdk").McpHttpServerConfig = {
@@ -799,7 +805,7 @@ app.post("/session", async (c) => {
       files?: Array<{ sandbox_path: string; content: string }>;
       sandbox_tools?: boolean;
       projects?: Array<{ id: string; name: string; description: string; repo_url?: string }>;
-      mcp_servers?: Array<{ name: string; url: string; transport?: "sse" | "http" }>;
+      mcp_servers?: Array<{ name: string; url: string; transport?: "sse" | "http"; auth_token?: string }>;
       platform_session_id?: string;
     };
     title = body?.title;
