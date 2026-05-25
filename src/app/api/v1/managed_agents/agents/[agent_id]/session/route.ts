@@ -526,8 +526,7 @@ async function runInitialPrompt(
   // Keep last_seen_at fresh while the (2-15 min) initial agent task runs.
   // Without this, last_seen_at stays pinned at session-creation time and the
   // idle reaper (see SESSION_IDLE_TIMEOUT_MS in reconcile.ts) kills the session
-  // mid-task — even though the agent is actively working. The timer is unref'd
-  // so it can never keep the process alive on its own.
+  // mid-task — even though the agent is actively working.
   const heartbeat: NodeJS.Timeout = setInterval(() => {
     void prisma.session
       .update({ where: { session_id }, data: { last_seen_at: new Date() } })
@@ -540,8 +539,6 @@ async function runInitialPrompt(
     // mid-flight still leaves a partial thread to render in the chat.
     void snapshotThreadToHistory(session_id, sandbox_url, harness_session_id);
   }, INITIAL_TASK_HEARTBEAT_MS);
-  // Don't keep the event loop alive solely for this timer.
-  if (typeof heartbeat.unref === "function") heartbeat.unref();
 
   try {
     // Build Claude-format multimodal parts when attachments are present.

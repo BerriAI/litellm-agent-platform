@@ -115,7 +115,6 @@ function startHeartbeat(
     // a dead pod mid-task leaves nothing to debug.
     void persistHistorySnapshot({ session_id, sandbox_url, harness_session_id });
   }, MESSAGE_HEARTBEAT_MS);
-  if (typeof t.unref === "function") t.unref();
   return t;
 }
 
