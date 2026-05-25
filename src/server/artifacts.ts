@@ -94,7 +94,13 @@ export async function createArtifact({
   // Lazy-construct the S3 client so a deployment with S3 configured but
   // never actually invoking the route doesn't open a connection pool it
   // never uses. (Also keeps module import side-effect-free.)
-  const s3 = new S3Client({ region: env.AWS_REGION });
+  // endpoint set → S3-compatible provider (e.g. Cloudflare R2). forcePathStyle
+  // keeps bucket addressing in the path so it works regardless of the provider's
+  // virtual-host support. Unset → real AWS S3 with default addressing.
+  const s3 = new S3Client({
+    region: env.AWS_REGION,
+    ...(env.AWS_S3_ENDPOINT && { endpoint: env.AWS_S3_ENDPOINT, forcePathStyle: true }),
+  });
 
   await s3.send(
     new PutObjectCommand({
