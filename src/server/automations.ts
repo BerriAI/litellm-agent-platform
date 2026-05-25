@@ -18,6 +18,7 @@
  * tiny.
  */
 
+import os from "os";
 import type { AutomationRun } from "@prisma/client";
 import { Cron } from "croner";
 import { prisma } from "@/server/db";
@@ -90,7 +91,8 @@ async function spawnAutomationSession(auto: DueAutomationRow): Promise<string> {
     env.PLATFORM_INTERNAL_URL ||
     env.LAP_BASE_URL ||
     "http://localhost:3000";
-  console.log("[automation] spawnAutomationSession", { baseUrl, agent_id: auto.agent_id, automation_id: auto.automation_id, pid: process.pid });
+  const host = os.hostname();
+  console.log("[automation] spawnAutomationSession", { baseUrl, agent_id: auto.agent_id, automation_id: auto.automation_id, pid: process.pid, host });
   const url = `${baseUrl.replace(/\/+$/, "")}/api/v1/managed_agents/agents/${encodeURIComponent(
     auto.agent_id,
   )}/session`;
@@ -108,8 +110,8 @@ async function spawnAutomationSession(auto: DueAutomationRow): Promise<string> {
   console.log("[automation] session create response", { status: res.status, url, automation_id: auto.automation_id });
   if (!res.ok) {
     const body = await res.text();
-    console.error("[automation] session create FAILED", { status: res.status, body, url, baseUrl });
-    throw new Error(`session create failed: ${res.status} ${body}`);
+    console.error("[automation] session create FAILED", { status: res.status, body, url, baseUrl, host, pid: process.pid });
+    throw new Error(`session create failed: ${res.status} ${body} [host=${host} pid=${process.pid} baseUrl=${baseUrl}]`);
   }
   // toApiSession renames session_id → id.
   const session = (await res.json()) as { id: string };
