@@ -39,6 +39,7 @@ import {
 } from "@/server/sessionThreadSync";
 import {
   HARNESS_BRAIN_INLINE,
+  HARNESS_OPENCODE_BRAIN_INLINE,
   HttpError,
   httpError,
   type HarnessMessage,
@@ -61,6 +62,7 @@ const SEND_PATH = new RegExp("^session/[^/]+/(message|prompt_async)$");
 async function recoverBrainInlineSession(
   session_id: string,
   old_harness_session_id: string,
+  harness_id: string,
 ): Promise<string> {
   const row = await prisma.session.findUnique({
     where: { session_id },
@@ -68,10 +70,13 @@ async function recoverBrainInlineSession(
   });
   if (!row?.agent) throw new HttpError(502, "session not found during recovery");
 
-  const inlineUrl =
-    process.env.CLAUDE_CODE_INLINE_URL ||
-    (env.IN_CLUSTER ? inlineHarnessUrl() : null);
-  if (!inlineUrl) throw new HttpError(503, "CLAUDE_CODE_INLINE_URL not configured");
+  const inlineUrl = harness_id === HARNESS_OPENCODE_BRAIN_INLINE
+    ? (process.env.OPENCODE_INLINE_URL || null)
+    : (process.env.CLAUDE_CODE_INLINE_URL || (env.IN_CLUSTER ? inlineHarnessUrl() : null));
+  if (!inlineUrl) {
+    const varName = harness_id === HARNESS_OPENCODE_BRAIN_INLINE ? "OPENCODE_INLINE_URL" : "CLAUDE_CODE_INLINE_URL";
+    throw new HttpError(503, `${varName} not configured`);
+  }
 
   // Surface harness unavailability as 503 (retryable) not 500 (opaque crash).
   // Callers should retry after a few seconds — pod replacement windows are short.
@@ -256,7 +261,8 @@ async function proxy(req: Request, ctx: RouteContext): Promise<Response> {
       }
     } else {
       const isBrainInlineSend =
-        cached.harness_id === HARNESS_BRAIN_INLINE && req.method === "POST" && SEND_PATH.test(tail);
+        (cached.harness_id === HARNESS_BRAIN_INLINE || cached.harness_id === HARNESS_OPENCODE_BRAIN_INLINE) &&
+        req.method === "POST" && SEND_PATH.test(tail);
 
       try {
         upstream = await fetch(target, init);
@@ -266,7 +272,7 @@ async function proxy(req: Request, ctx: RouteContext): Promise<Response> {
         if (isBrainInlineSend) {
           console.warn(`[opencode-proxy] session=${session_id} harness unreachable on send; recovering`);
           try {
-            const newHarnessId = await recoverBrainInlineSession(session_id, cached.harness_session_id);
+            const newHarnessId = await recoverBrainInlineSession(session_id, cached.harness_session_id, cached.harness_id);
             // Re-fetch cache to get the updated sandbox_url (new pod IP/Service DNS).
             const fresh = await getCachedSession(session_id);
             const newSandboxUrl = fresh?.sandbox_url ?? cached.sandbox_url;
@@ -293,7 +299,7 @@ async function proxy(req: Request, ctx: RouteContext): Promise<Response> {
       if (isBrainInlineSend && upstream.status === 404) {
         console.warn(`[opencode-proxy] session=${session_id} harness 404 on send (session Map wiped); recovering`);
         try {
-          const newHarnessId = await recoverBrainInlineSession(session_id, cached.harness_session_id);
+          const newHarnessId = await recoverBrainInlineSession(session_id, cached.harness_session_id, cached.harness_id);
           // Re-fetch cache for the updated sandbox_url after recovery.
           const fresh = await getCachedSession(session_id);
           const newSandboxUrl = fresh?.sandbox_url ?? cached.sandbox_url;
@@ -306,6 +312,29 @@ async function proxy(req: Request, ctx: RouteContext): Promise<Response> {
           if (sentUserMsgId) await markUserMessageFailed(sentUserMsgId);
           // Surface retryable errors; fall through otherwise (proxy original 404).
           if (recoveryErr instanceof HttpError) throw recoveryErr;
+        }
+      }
+
+      // Brain-inline: recover from 404 on GET requests (session lost from harness memory on
+      // server restart / rolling deploy). Covers the event stream and any other session-scoped
+      // GET. Message history is excluded — it already falls back to the DB snapshot below.
+      const isBrainInlineGet =
+        (cached.harness_id === HARNESS_BRAIN_INLINE || cached.harness_id === HARNESS_OPENCODE_BRAIN_INLINE) &&
+        req.method === "GET" && !isMessageHistory && upstream.status === 404;
+      if (isBrainInlineGet) {
+        console.warn(`[opencode-proxy] session=${session_id} harness 404 on GET ${tail}; recovering`);
+        try {
+          const newHarnessId = await recoverBrainInlineSession(session_id, cached.harness_session_id, cached.harness_id);
+          const fresh = await getCachedSession(session_id);
+          const newSandboxUrl = fresh?.sandbox_url ?? cached.sandbox_url;
+          const newTail = tail.replace(cached.harness_session_id, newHarnessId);
+          const newTarget = `${newSandboxUrl}/${newTail}${search}`;
+          upstream = await fetch(newTarget, init);
+          console.log(`[opencode-proxy] session=${session_id} recovery=get_retry_ok tail=${newTail}`);
+        } catch (recoveryErr) {
+          console.error(`[opencode-proxy] session=${session_id} GET recovery failed:`, recoveryErr);
+          if (recoveryErr instanceof HttpError) throw recoveryErr;
+          // Fall through — proxy original 404 back to the client.
         }
       }
     }
