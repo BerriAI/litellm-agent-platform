@@ -53,15 +53,21 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 function resolveMemoryEnv() {
   const base_url = (process.env.LAP_BASE_URL ?? "").replace(/\/+$/, "");
   const agent_id = process.env.AGENT_ID ?? "";
+  // Session-scoped mode is for the shared inline harness, which has no per-agent
+  // AGENT_ID. The tools take a `session_id` arg instead and hit the
+  // session-scoped route; MASTER_KEY is an accepted bearer there.
+  const session_scoped = process.env.LAP_MEMORY_SESSION_SCOPED === "1";
   const access_token =
-    process.env.LAP_ACCESS_TOKEN ?? process.env.LAP_AUTH_TOKEN ?? "";
+    process.env.LAP_ACCESS_TOKEN ??
+    process.env.LAP_AUTH_TOKEN ??
+    (session_scoped ? (process.env.MASTER_KEY ?? "") : "");
   const refresh_token = process.env.LAP_REFRESH_TOKEN ?? "";
   const missing = [];
   if (!base_url) missing.push("LAP_BASE_URL");
-  if (!agent_id) missing.push("AGENT_ID");
-  if (!access_token) missing.push("LAP_ACCESS_TOKEN");
+  if (!session_scoped && !agent_id) missing.push("AGENT_ID");
+  if (!access_token) missing.push(session_scoped ? "MASTER_KEY/LAP_ACCESS_TOKEN" : "LAP_ACCESS_TOKEN");
   if (missing.length > 0) return { env: null, missing };
-  return { env: { base_url, agent_id, access_token, refresh_token }, missing: [] };
+  return { env: { base_url, agent_id, access_token, refresh_token, session_scoped }, missing: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +131,10 @@ function proxyDispatcher() {
 
 let cachedAccessToken = null;
 
-function memoryUrl(env, suffix = "", qs = null) {
-  const base = `${env.base_url}/api/v1/managed_agents/agents/${env.agent_id}/memory${suffix}`;
+function memoryUrl(env, suffix = "", qs = null, session_id = "") {
+  const base = env.session_scoped
+    ? `${env.base_url}/api/v1/managed_agents/sessions/${encodeURIComponent(session_id)}/memory${suffix}`
+    : `${env.base_url}/api/v1/managed_agents/agents/${env.agent_id}/memory${suffix}`;
   return qs && qs.toString() ? `${base}?${qs.toString()}` : base;
 }
 
@@ -188,14 +196,17 @@ async function callApi(env, method, url, body) {
 }
 
 async function callSaveMemory(env, input, extra = {}) {
-  const res = await callApi(env, "POST", memoryUrl(env), {
+  if (env.session_scoped && !input.session_id) {
+    return { isError: true, text: "save_memory failed: session_id is required — copy it verbatim from <lap_session_id> in your context." };
+  }
+  const res = await callApi(env, "POST", memoryUrl(env, "", null, input.session_id), {
     text: scrubSecrets(input.text),
     tags: input.tags ?? [],
     type: input.type,
     priority: input.priority,
     pinned: input.pinned,
     source: "agent",
-    source_session_id: extra.source_session_id,
+    source_session_id: input.session_id ?? extra.source_session_id,
   });
   if (!res.ok) {
     return {
@@ -207,10 +218,13 @@ async function callSaveMemory(env, input, extra = {}) {
 }
 
 async function callSearchMemory(env, input) {
+  if (env.session_scoped && !input.session_id) {
+    return { isError: true, text: "search_memory failed: session_id is required — copy it verbatim from <lap_session_id> in your context." };
+  }
   const qs = new URLSearchParams();
   if (input.query) qs.set("q", input.query);
   if (input.tag) qs.set("tag", input.tag);
-  const res = await callApi(env, "GET", memoryUrl(env, "", qs));
+  const res = await callApi(env, "GET", memoryUrl(env, "", qs, input.session_id));
   if (!res.ok) {
     return {
       isError: true,
@@ -316,10 +330,32 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
+// In session-scoped mode (shared inline harness) the tools need a `session_id`
+// arg so the platform can resolve which agent's memory to use.
+function withSessionArg(tools) {
+  return tools.map((t) => ({
+    ...t,
+    inputSchema: {
+      ...t.inputSchema,
+      properties: {
+        ...t.inputSchema.properties,
+        session_id: {
+          type: "string",
+          description:
+            "The current LAP session id — copy it verbatim from <lap_session_id> in your context. Required.",
+        },
+      },
+      required: [...(t.inputSchema.required ?? []), "session_id"],
+    },
+  }));
+}
+
+const EXPOSED_TOOLS = env ? (env.session_scoped ? withSessionArg(TOOLS) : TOOLS) : [];
+
 // When memory isn't configured, expose NO tools — the harness still boots and
 // the LLM simply never sees save_memory/search_memory.
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: env ? TOOLS : [],
+  tools: EXPOSED_TOOLS,
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -344,7 +380,9 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(
   env
-    ? `[memory-mcp] ready (agent=${env.agent_id}, base=${env.base_url})`
+    ? env.session_scoped
+      ? `[memory-mcp] ready (session-scoped, base=${env.base_url})`
+      : `[memory-mcp] ready (agent=${env.agent_id}, base=${env.base_url})`
     : `[memory-mcp] disabled — missing env: ${missing.join(", ")}. ` +
         `save_memory/search_memory will NOT be exposed.`,
 );
