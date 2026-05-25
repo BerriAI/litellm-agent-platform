@@ -87,6 +87,14 @@ export async function watchEventStreamAndSnapshot(
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let pending = "";
+
+  // Checkpoint mid-turn every 15s so autonomous long-running turns leave a
+  // partial record in the DB if the pod dies before session.idle fires.
+  const snapshotInterval = setInterval(() => {
+    console.log(`[heartbeat] session=${opts.session_id} mid-turn snapshot`);
+    void snapshotSessionThread(opts);
+  }, 15_000);
+
   try {
     for (;;) {
       const { value, done } = await reader.read();
@@ -121,6 +129,7 @@ export async function watchEventStreamAndSnapshot(
   } catch {
     // Stream aborted (client disconnect) or upstream error — nothing to do.
   } finally {
+    clearInterval(snapshotInterval);
     try {
       reader.releaseLock();
     } catch {
