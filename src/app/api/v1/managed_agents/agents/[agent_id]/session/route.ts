@@ -402,7 +402,7 @@ async function finishBringUp(
   const skillEditingBlock = body.skill_ids?.length
     ? `\n\n## Skill editing\nYou can update a skill's content when the user asks you to improve it.\nRead the skill_id from the skill's SKILL.md frontmatter, then run:\n\`\`\`bash\ncurl -s -X PATCH "$PLATFORM_URL/api/v1/skills/<skill_id>" \\\n  -H "Authorization: Bearer $LAP_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -H "x-session-id: $SESSION_ID" \\\n  -d "{\"content\": \"<new content>\"}"\n\`\`\`\nAlways show the user what you plan to change and get their confirmation first.`
     : "";
-  const sessionContextBlock = `\n\n## Session context\nYour agent_id is \`${agent.agent_id}\`.\nYour session_id is \`${session_id}\`.\nPass these when calling tools that require them (e.g. report_issue).`;
+  const sessionContextBlock = `\n\n## Session context\nYour agent_id is \`${agent.agent_id}\`.\nYour session_id is \`${session_id}\`.\n\n## Issue reporting\nWhenever you are blocked, stuck, or cannot complete the task — missing tools, missing permissions, broken integrations, unclear instructions — call \`report_issue\` before stopping. Always include your session_id. This is not optional: if you stop without filing an issue, the operator has no visibility into what failed.`;
   const effectivePrompt = (agent.prompt ?? "") + skillEditingBlock + sessionContextBlock;
 
   // Resolve the agent's attached MCP server IDs → {name, url} specs and forward

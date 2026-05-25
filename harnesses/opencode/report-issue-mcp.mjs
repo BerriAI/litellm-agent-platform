@@ -142,6 +142,35 @@ async function callReportIssue(env, input) {
   };
 }
 
+async function callListIssues(env, input) {
+  const qs = new URLSearchParams({ status: input.status ?? "open" });
+  if (input.severity) qs.set("severity", input.severity);
+  const url = `${env.base_url}/api/v1/managed_agents/agents/${env.agent_id}/issues?${qs}`;
+  const res = await callApi(env, "GET", url, undefined);
+  if (!res.ok) {
+    return { isError: true, text: `list_issues failed (HTTP ${res.status}): ${res.error ?? JSON.stringify(res.data)}` };
+  }
+  const rows = Array.isArray(res.data) ? res.data : [];
+  if (rows.length === 0) return { isError: false, text: "No issues found." };
+  const summary = rows.map((i) =>
+    `- [${i.id}] (${i.severity}, ×${i.times_seen}) ${i.title}`
+  ).join("\n");
+  return { isError: false, text: summary };
+}
+
+async function callUpdateIssue(env, input) {
+  if (!input.issue_id) return { isError: true, text: "update_issue: issue_id is required" };
+  const url = `${env.base_url}/api/v1/managed_agents/agents/${env.agent_id}/issues/${input.issue_id}`;
+  const body = {};
+  if (input.status) body.status = input.status;
+  if (input.severity) body.severity = input.severity;
+  const res = await callApi(env, "PATCH", url, body);
+  if (!res.ok) {
+    return { isError: true, text: `update_issue failed (HTTP ${res.status}): ${res.error ?? JSON.stringify(res.data)}` };
+  }
+  return { isError: false, text: `Issue ${input.issue_id} updated.` };
+}
+
 // ---------------------------------------------------------------------------
 // Tool spec
 // ---------------------------------------------------------------------------
@@ -176,6 +205,49 @@ const TOOLS = [
       required: ["title"],
     },
   },
+  {
+    name: "list_issues",
+    description: "List open issues for this agent. Call this at the start of a session to check for known problems before filing a new one — if a matching issue exists, use update_issue instead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["open", "resolved", "dismissed"],
+          description: "Filter by status. Defaults to 'open'.",
+        },
+        severity: {
+          type: "string",
+          enum: ["info", "warning", "error", "critical"],
+          description: "Optional severity filter.",
+        },
+      },
+    },
+  },
+  {
+    name: "update_issue",
+    description: "Update the status or severity of an existing issue. Use this when you see a known issue recurring (escalate severity) or confirm it is fixed (status=resolved).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issue_id: {
+          type: "string",
+          description: "The issue ID from list_issues.",
+        },
+        status: {
+          type: "string",
+          enum: ["open", "resolved", "dismissed"],
+          description: "New status.",
+        },
+        severity: {
+          type: "string",
+          enum: ["info", "warning", "error", "critical"],
+          description: "New severity.",
+        },
+      },
+      required: ["issue_id"],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -203,6 +275,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
   if (name === "report_issue") {
     const out = await callReportIssue(env, args ?? {});
+    return { content: [{ type: "text", text: out.text }], isError: out.isError };
+  }
+  if (name === "list_issues") {
+    const out = await callListIssues(env, args ?? {});
+    return { content: [{ type: "text", text: out.text }], isError: out.isError };
+  }
+  if (name === "update_issue") {
+    const out = await callUpdateIssue(env, args ?? {});
     return { content: [{ type: "text", text: out.text }], isError: out.isError };
   }
   return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };

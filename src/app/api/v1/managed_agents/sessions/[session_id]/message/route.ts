@@ -270,9 +270,11 @@ export async function POST(req: Request, ctx: RouteContext) {
     if (priorTurns === 0) {
       const agentRow = await prisma.agent.findUnique({
         where: { agent_id: cached.agent_id },
-        select: { prompt: true },
+        select: { prompt: true, agent_id: true },
       });
-      parts = prependAgentSystemPrompt(agentRow?.prompt, parts, session_id);
+      const issueReportingBlock = `\n\n## Issue reporting — MANDATORY\nIf you cannot complete something because a tool, permission, or integration is missing or broken, you MUST call \`report_issue\` BEFORE replying to the user. Do not suggest alternatives. Do not say "I don't have X." File the issue first, then explain. session_id=${session_id} agent_id=${cached.agent_id}. No exceptions.`;
+      const promptWithContext = (agentRow?.prompt ?? "") + issueReportingBlock;
+      parts = prependAgentSystemPrompt(promptWithContext, parts, session_id);
     }
 
     // Durably record the user turn *before* dialing the harness so a mid-turn
