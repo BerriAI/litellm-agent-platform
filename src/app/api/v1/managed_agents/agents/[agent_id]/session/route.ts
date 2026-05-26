@@ -534,6 +534,8 @@ async function runInitialPrompt(
     void snapshotThreadToHistory(session_id, sandbox_url, harness_session_id);
   }, INITIAL_TASK_HEARTBEAT_MS);
 
+  // Declared outside try so the catch block can reference it for cleanup.
+  let userMsg: { message_id: string; seq: number } | null = null;
   try {
     // Build Claude-format multimodal parts when attachments are present.
     // Text part first, then each image as a base64 source — matches the
@@ -563,7 +565,7 @@ async function runInitialPrompt(
     );
     // Record the initial prompt in the durable log *before* sending so the
     // first turn is replayable if the sandbox dies before the agent replies.
-    const userMsg = await appendUserMessage({
+    userMsg = await appendUserMessage({
       session_id,
       harness_session_id,
       parts: parts as import("@/server/types").HarnessMessagePart[],
