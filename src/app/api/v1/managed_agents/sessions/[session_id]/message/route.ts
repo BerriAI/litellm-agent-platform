@@ -52,6 +52,8 @@ import {
   HttpError,
   httpError,
   SendMessageBody,
+  HARNESS_OPENCODE,
+  HARNESS_OPENCODE_BRAIN_INLINE,
   type HarnessMessage,
   type HarnessMessagePart,
   type HarnessMessageResponse,
@@ -78,6 +80,7 @@ async function persistHistorySnapshot(opts: {
       sandbox_url: opts.sandbox_url,
       harness_session_id: opts.harness_session_id,
     });
+    console.log(`[heartbeat] session=${opts.session_id} snapshot msgs=${msgs.length}`);
     await prisma.session.update({
       where: { session_id: opts.session_id },
       data: {
@@ -86,19 +89,22 @@ async function persistHistorySnapshot(opts: {
     });
   } catch (err) {
     console.warn(
-      `history snapshot failed for session ${opts.session_id}:`,
+      `[heartbeat] session=${opts.session_id} snapshot failed:`,
       err,
     );
   }
 }
 
-// last_seen_at heartbeat cadence while a message turn runs. Must stay
-// comfortably below SESSION_IDLE_TIMEOUT_MS so the reconciler never mistakes
-// an in-flight turn for an idle session. Writes directly to prisma — not the
-// batched markSessionSeen queue — so the flush is guaranteed every interval.
-const MESSAGE_HEARTBEAT_MS = 60_000;
+// Heartbeat cadence while a message turn runs. Short enough that a long
+// autonomous turn (10-30 min) checkpoints frequently — both for the reconciler's
+// idle timeout and for mid-turn debug visibility if the agent dies.
+const MESSAGE_HEARTBEAT_MS = 15_000;
 
-function startHeartbeat(session_id: string): NodeJS.Timeout {
+function startHeartbeat(
+  session_id: string,
+  sandbox_url: string,
+  harness_session_id: string,
+): NodeJS.Timeout {
   const t = setInterval(() => {
     void prisma.session
       .update({ where: { session_id }, data: { last_seen_at: new Date() } })
@@ -107,8 +113,11 @@ function startHeartbeat(session_id: string): NodeJS.Timeout {
           `message heartbeat failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
+    // Snapshot the live thread mid-turn so autonomous long-running turns
+    // (10-30 min) leave a partial record in the DB every 15s. Without this,
+    // a dead pod mid-task leaves nothing to debug.
+    void persistHistorySnapshot({ session_id, sandbox_url, harness_session_id });
   }, MESSAGE_HEARTBEAT_MS);
-  if (typeof t.unref === "function") t.unref();
   return t;
 }
 
@@ -207,7 +216,7 @@ async function recoverAndResend(opts: {
   }
 
   console.log(`[message] session=${session_id} recovery=complete sandbox_url=${recovered.sandbox_url} harness_session_id=${recovered.harness_session_id}`);
-  const hb = startHeartbeat(session_id);
+  const hb = startHeartbeat(session_id, recovered.sandbox_url, recovered.harness_session_id);
   let response: HarnessMessageResponse;
   try {
     response = await harnessSendMessage({
@@ -272,7 +281,9 @@ export async function POST(req: Request, ctx: RouteContext) {
         where: { agent_id: cached.agent_id },
         select: { prompt: true, agent_id: true },
       });
-      const issueReportingBlock = `\n\n## Issue reporting — MANDATORY\nCall \`report_issue\` immediately (before replying or continuing) whenever:\n- You cannot complete a request because a tool, integration, or permission is missing\n- A sandbox restarts unexpectedly or required binaries/templates are missing\n- A tool returns an error you have to work around (broken API, auth failure, wrong environment)\n- You are about to stop because of a blocker\n\nDo not suggest alternatives first. File the issue, then explain. Always pass session_id=${session_id} and agent_id=${cached.agent_id}. No exceptions.`;
+      const isOpencode = cached.harness_id === HARNESS_OPENCODE || cached.harness_id === HARNESS_OPENCODE_BRAIN_INLINE;
+      const issueToolName = isOpencode ? "lap-issue-reporter_report_issue" : "report_issue";
+      const issueReportingBlock = `\n\n## Issue reporting — MANDATORY\nCall \`${issueToolName}\` immediately (before replying or continuing) whenever:\n- You cannot complete a request because a tool, integration, or permission is missing\n- A sandbox restarts unexpectedly or required binaries/templates are missing\n- A tool returns an error you have to work around (broken API, auth failure, wrong environment)\n- You are about to stop because of a blocker\n\nDo not suggest alternatives first. File the issue, then explain. Always pass session_id=${session_id} and agent_id=${cached.agent_id}. No exceptions.`;
       const promptWithContext = (agentRow?.prompt ?? "") + issueReportingBlock;
       parts = prependAgentSystemPrompt(promptWithContext, parts, session_id);
     }
@@ -288,7 +299,7 @@ export async function POST(req: Request, ctx: RouteContext) {
 
     let response: HarnessMessageResponse;
     console.log(`[message] session=${session_id} sandbox_url=${cached.sandbox_url} harness_session_id=${cached.harness_session_id}`);
-    const hb = startHeartbeat(session_id);
+    const hb = startHeartbeat(session_id, cached.sandbox_url, cached.harness_session_id);
     try {
       response = await harnessSendMessage({
         sandbox_url: cached.sandbox_url,

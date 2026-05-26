@@ -19,7 +19,7 @@
     "@base-ui/react": "^1.4.1",
     "@daytona/sdk": "^0.180.0",
     "@kubernetes/client-node": "^1.4.0",
-    "@opencode-ai/sdk": "^1.15.6",
+    "@opencode-ai/sdk": "^1.15.10",
     "@prisma/client": "^6.0.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",

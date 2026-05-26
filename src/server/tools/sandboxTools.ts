@@ -30,7 +30,7 @@ export async function provisionSandbox(
       sandboxMap.set(mapKey(session_id, name), existing);
       return `sandbox '${name}' ready`;
     }
-    const id = await p.create({ session_id, agent });
+    const { id, envMap } = await p.create({ session_id, agent });
     const url = `${p.urlScheme}://${id}`;
     sandboxMap.set(mapKey(session_id, name), url);
     const merged = { ...(existingSandboxes ?? {}), [name]: url };
@@ -38,6 +38,10 @@ export async function provisionSandbox(
       where: { session_id },
       data: { sandboxes: merged } as Prisma.SessionUpdateInput,
     });
+    if (Object.keys(envMap).length > 0) {
+      const envLines = Object.entries(envMap).map(([k, v]) => `${k}=${v}`).join("\n");
+      return `sandbox '${name}' ready\nSetup script completed. Exported environment:\n${envLines}`;
+    }
     return `sandbox '${name}' ready`;
   }
 

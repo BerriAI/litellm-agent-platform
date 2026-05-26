@@ -274,7 +274,14 @@ export const UpdateAgentBody = z.object({
   /** Replace per-credential host bindings. See CreateAgentBody.env_var_hosts. */
   env_var_hosts: envVarHostsSchema,
   /** Replace the full sandbox_files array. Used to update setup.sh and other seeded files. */
-  sandbox_files: z.array(SandboxFileSpecSchema).optional(),
+  sandbox_files: z
+    .array(SandboxFileSpecSchema)
+    .max(SANDBOX_FILES_MAX_COUNT, `sandbox_files: max ${SANDBOX_FILES_MAX_COUNT} files`)
+    .refine(
+      (files) => (files as SandboxFileSpec[]).reduce((sum, f) => sum + f.content.length, 0) <= SANDBOX_FILES_MAX_TOTAL_B64,
+      { message: `sandbox_files: total base64 size must be ≤ 10 MB` },
+    )
+    .optional(),
 });
 export type UpdateAgentBody = z.infer<typeof UpdateAgentBody>;
 

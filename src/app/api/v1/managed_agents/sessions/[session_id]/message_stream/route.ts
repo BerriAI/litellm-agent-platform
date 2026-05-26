@@ -63,6 +63,7 @@ async function persistHistorySnapshot(opts: {
       sandbox_url: opts.sandbox_url,
       harness_session_id: opts.harness_session_id,
     });
+    console.log(`[heartbeat] session=${opts.session_id} snapshot msgs=${msgs.length}`);
     await prisma.session.update({
       where: { session_id: opts.session_id },
       data: {
@@ -74,7 +75,7 @@ async function persistHistorySnapshot(opts: {
     });
   } catch (err) {
     console.warn(
-      `history snapshot failed for session ${opts.session_id}:`,
+      `[heartbeat] session=${opts.session_id} snapshot failed:`,
       err,
     );
   }
@@ -231,6 +232,12 @@ export async function POST(req: Request, ctx: RouteContext) {
           return;
         }
 
+        // Checkpoint the harness thread to DB every 15s while the turn runs.
+        // Without this, a pod death mid-turn leaves nothing in the DB to debug.
+        const snapshotInterval = setInterval(() => {
+          void persistHistorySnapshot({ session_id, sandbox_url, harness_session_id });
+        }, 15_000);
+
         // Parse the upstream SSE stream line-by-line. opencode emits one
         // JSON object per `data:` line followed by a blank line — we buffer
         // partial lines in `pending` to handle TCP-level fragmentation.
@@ -335,6 +342,7 @@ export async function POST(req: Request, ctx: RouteContext) {
             send({ type: "error", message: "stream timeout" });
           }
         } finally {
+          clearInterval(snapshotInterval);
           clearTimeout(deadlineTimer);
           // Release the body reader's lock before aborting the controller
           // so undici tears the upstream socket down cleanly. Without this

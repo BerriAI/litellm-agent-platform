@@ -53,6 +53,7 @@ import {
 } from "@/server/harness";
 import {
   CreateSessionBody,
+  HARNESS_OPENCODE,
   HARNESS_OPENCODE_BRAIN_INLINE,
   inlineHarnessUrlEnv,
   isInlineHarness,
@@ -402,7 +403,9 @@ async function finishBringUp(
   const skillEditingBlock = body.skill_ids?.length
     ? `\n\n## Skill editing\nYou can update a skill's content when the user asks you to improve it.\nRead the skill_id from the skill's SKILL.md frontmatter, then run:\n\`\`\`bash\ncurl -s -X PATCH "$PLATFORM_URL/api/v1/skills/<skill_id>" \\\n  -H "Authorization: Bearer $LAP_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -H "x-session-id: $SESSION_ID" \\\n  -d "{\"content\": \"<new content>\"}"\n\`\`\`\nAlways show the user what you plan to change and get their confirmation first.`
     : "";
-  const sessionContextBlock = `\n\n## Session context\nYour agent_id is \`${agent.agent_id}\`.\nYour session_id is \`${session_id}\`.\n\n## Issue reporting\nWhenever you are blocked, stuck, or cannot complete the task — missing tools, missing permissions, broken integrations, unclear instructions — call \`report_issue\` before stopping. Always include your session_id. This is not optional: if you stop without filing an issue, the operator has no visibility into what failed.`;
+  const isOpencodeHarness = agent.harness_id === HARNESS_OPENCODE || agent.harness_id === HARNESS_OPENCODE_BRAIN_INLINE;
+  const issueToolName = isOpencodeHarness ? "lap-issue-reporter_report_issue" : "report_issue";
+  const sessionContextBlock = `\n\n## Session context\nYour agent_id is \`${agent.agent_id}\`.\nYour session_id is \`${session_id}\`.\n\n## Issue reporting — MANDATORY\nCall \`${issueToolName}\` immediately (before continuing or replying) whenever any of these occur — even if you can work around it:\n- A sandbox command returns unexpected output (file you wrote is gone, state appears reset between operations)\n- A tool returns an error you have to work around\n- Required permissions, integrations, or binaries are missing\n- You are blocked or about to stop\n\nDo not wait until you are fully blocked. File the issue the moment you notice the anomaly, then continue. Always pass session_id and agent_id. This is not optional.`;
   const effectivePrompt = (agent.prompt ?? "") + skillEditingBlock + sessionContextBlock;
 
   // Resolve the agent's attached MCP server IDs → {name, url} specs and forward
@@ -489,7 +492,7 @@ async function finishBringUp(
 // last_seen_at heartbeat cadence while the initial agent task runs. Must stay
 // comfortably below SESSION_IDLE_TIMEOUT_MS (reconcile.ts) so an in-flight turn
 // is never mistaken for an idle session by the reconciler.
-const INITIAL_TASK_HEARTBEAT_MS = 60_000;
+const INITIAL_TASK_HEARTBEAT_MS = 15_000;
 
 // Snapshot the live harness thread into Session.history so the chat can render
 // the conversation even after the sandbox is reaped. Automation runs and any
@@ -503,6 +506,7 @@ async function snapshotThreadToHistory(
 ): Promise<void> {
   try {
     const msgs = await harnessListMessages({ sandbox_url, harness_session_id });
+    console.log(`[heartbeat] session=${session_id} snapshot msgs=${msgs.length}`);
     if (msgs.length === 0) return;
     await prisma.session.update({
       where: { session_id },
@@ -510,7 +514,7 @@ async function snapshotThreadToHistory(
     });
   } catch (err) {
     console.warn(
-      `initial_prompt history snapshot failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`,
+      `[heartbeat] session=${session_id} snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -526,8 +530,7 @@ async function runInitialPrompt(
   // Keep last_seen_at fresh while the (2-15 min) initial agent task runs.
   // Without this, last_seen_at stays pinned at session-creation time and the
   // idle reaper (see SESSION_IDLE_TIMEOUT_MS in reconcile.ts) kills the session
-  // mid-task — even though the agent is actively working. The timer is unref'd
-  // so it can never keep the process alive on its own.
+  // mid-task — even though the agent is actively working.
   const heartbeat: NodeJS.Timeout = setInterval(() => {
     void prisma.session
       .update({ where: { session_id }, data: { last_seen_at: new Date() } })
@@ -540,8 +543,6 @@ async function runInitialPrompt(
     // mid-flight still leaves a partial thread to render in the chat.
     void snapshotThreadToHistory(session_id, sandbox_url, harness_session_id);
   }, INITIAL_TASK_HEARTBEAT_MS);
-  // Don't keep the event loop alive solely for this timer.
-  if (typeof heartbeat.unref === "function") heartbeat.unref();
 
   try {
     // Build Claude-format multimodal parts when attachments are present.
@@ -777,15 +778,15 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
       sandboxes: null,
     });
 
-    if (body.initial_prompt) {
-      void harnessSendMessage({
-        sandbox_url: inlineUrl,
+    if (body.initial_prompt || (body.initial_attachments && body.initial_attachments.length > 0)) {
+      void runInitialPrompt(
+        agent,
+        session.session_id,
+        inlineUrl,
         harness_session_id,
-        model: agent.model,
-        parts: prependAgentSystemPrompt(agent.prompt, expandMessage(body.initial_prompt), session.session_id),
-      }).catch((err: unknown) => {
-        console.error(`brain-inline initial_prompt failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+        body.initial_prompt ?? "",
+        body.initial_attachments,
+      );
     }
 
     const updatedSession = await prisma.session.findUniqueOrThrow({ where: { session_id: session.session_id } });

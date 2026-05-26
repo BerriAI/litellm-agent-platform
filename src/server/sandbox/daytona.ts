@@ -23,7 +23,7 @@ export class DaytonaProvider extends SandboxProvider {
     });
   }
 
-  async create(params: ProvisionParams): Promise<string> {
+  async create(params: ProvisionParams): Promise<{ id: string; envMap: Record<string, string> }> {
     const raw =
       params.agent.env_vars &&
       typeof params.agent.env_vars === "object" &&
@@ -94,7 +94,7 @@ export class DaytonaProvider extends SandboxProvider {
       }
     }
 
-    return sandbox.id;
+    return { id: sandbox.id, envMap: {} };
   }
 
   async execute(id: string, cmd: string, timeoutMs: number): Promise<string> {

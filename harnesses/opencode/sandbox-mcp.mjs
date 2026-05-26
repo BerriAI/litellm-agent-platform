@@ -1,25 +1,8 @@
 #!/usr/bin/env node
 /**
- * sandbox-mcp — MCP server exposing sandbox tools to opencode.
- *
  * Two modes:
- *   1. Platform delegation: SESSION_ID + LAP_BASE_URL set in env → calls the
- *      platform's /api/v1/managed_agents/sessions/<id>/sandbox/* routes.
- *   2. Direct E2B: SESSION_ID env unset (the inline-shared harness serves many
- *      sessions from one process) → talks to E2B directly.
- *
- * Direct mode used to keep an in-process `Map<name, Sandbox>` keyed only by
- * the agent-supplied `name` ("main"). That collided across concurrent sessions
- * — Session B's provision("main") killed Session A's sandbox and overwrote
- * the map entry, so A's next execute() ran on B's box (branches B checked out,
- * processes B started, etc.). It also lost everyone's sandbox on a harness
- * restart because the Map was process-local.
- *
- * This file now scopes every direct-mode sandbox by session_id and persists
- * the e2b sandbox id on the session row via the /sandbox-id endpoint, so the
- * session is the unit of ownership and the harness can reconnect to a live
- * sandbox by id after restart. The in-process `sessionSandboxes` Map is just
- * a cache; the session row is the source of truth.
+ * 1. Platform delegation: SESSION_ID + LAP_BASE_URL set → calls platform API
+ * 2. Direct E2B fallback: SESSION_ID missing (inline) → E2B direct + vault proxy
  */
 
 import { Sandbox } from "e2b";
@@ -46,59 +29,56 @@ const SANDBOX_TIMEOUT_MS = 1_800_000;
 const EXECUTE_TIMEOUT_MS = 180_000;
 
 const USE_DIRECT = !ENV_SESSION_ID;
-// Cache only — source of truth is the session row's `sandbox_id` column. On
-// cache miss we GET /sandbox-id and `Sandbox.connect` by id; if e2b says the
-// sandbox is gone we DELETE /sandbox-id and the next provision creates fresh.
-const sessionSandboxes = new Map(); // session_id → Sandbox
+const sandboxes = new Map();
+// Sandboxes provisioned via the platform path (session_id passed at provision time).
+// Keyed by sandbox name → platform session_id so execute/read_file can route correctly.
+const sandboxSessionIds = new Map();
 
 console.error(`[sandbox-mcp] mode=${USE_DIRECT ? "direct-e2b" : "platform"} template=${E2B_TEMPLATE} vault=${VAULT_URL ? "set" : "none"}`);
 
 const server = new Server({ name: "opencode-sandbox", version: "1.0.0" }, { capabilities: { tools: {} } });
 
-// `session_id` is required on every direct-mode tool call because the inline
-// harness is a single shared process — there is no per-call session context
-// other than what the agent passes. Documented per-tool below; the runtime
-// enforces it in `resolveSessionId`.
-const SESSION_ID_PROP = {
-  type: "string",
-  description: "LAP session ID. REQUIRED in the inline-shared harness (where SESSION_ID env is unset). When you have a <lap_session_id> block in context, pass that value.",
-};
-
 const TOOLS = [
   {
     name: "provision",
-    description: "Provision a sandbox for THIS session. Idempotent — if the session already has a sandbox, returns the existing one. The sandbox is owned by the session_id; concurrent sessions cannot collide.",
+    description: "Provision a new sandbox environment. Returns a confirmation message when the sandbox is ready. Always pass session_id from <lap_session_id> in your context so the platform can inject your agent's env vars (e.g. GITHUB_TOKEN) into the sandbox.",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Optional human label for the sandbox (kept for back-compat; routing is by session_id). Use 'main' if unsure." },
-        session_id: SESSION_ID_PROP,
+        name: { type: "string", description: "Label for the sandbox — used in subsequent execute() calls as sandbox_name. Use 'main' if unsure." },
+        session_id: { type: "string", description: "LAP session ID from <lap_session_id> in your context — required for agent env vars to be available in the sandbox." },
       },
       required: ["name"],
     },
   },
   {
     name: "execute",
-    description: "Execute a shell command inside this session's sandbox. Returns the command output.",
+    description: "Execute a shell command inside a provisioned sandbox. Returns the command output.",
     inputSchema: {
       type: "object",
       properties: {
-        sandbox_name: { type: "string", description: "Sandbox label (kept for back-compat; routing is by session_id)." },
+        sandbox_name: { type: "string", description: "Label of the provisioned sandbox" },
         cmd: { type: "string", description: "Shell command to execute" },
-        session_id: SESSION_ID_PROP,
       },
       required: ["sandbox_name", "cmd"],
     },
   },
   {
     name: "read_file",
-    description: "Read a file from this session's sandbox and return its text content. For large files, read a slice instead.",
+    description:
+      "Read a file from a provisioned sandbox and return its text content, so you can pull files out of the sandbox into your own workspace (no cat/base64 needed). For large files, read a slice instead.",
     inputSchema: {
       type: "object",
       properties: {
-        sandbox_name: { type: "string", description: "Sandbox label (kept for back-compat; routing is by session_id)." },
+        sandbox_name: {
+          type: "string",
+          description: "Label of the provisioned sandbox to read the file from",
+        },
         path: { type: "string", description: "Absolute path of the file inside the sandbox" },
-        session_id: SESSION_ID_PROP,
+        session_id: {
+          type: "string",
+          description: "LAP session ID — required when SESSION_ID env var is not set",
+        },
       },
       required: ["sandbox_name", "path"],
     },
@@ -106,14 +86,14 @@ const TOOLS = [
   {
     name: "upload_artifact",
     description:
-      "Upload a file from this session's sandbox to durable storage and get back a presigned download URL (valid 7 days). Use this to host a screenshot/PDF/CSV for embedding in a PR body — do NOT use external file hosts (imgur, 0x0.st, transfer.sh, catbox).",
+      "Upload a file from a provisioned sandbox to durable storage and get back a presigned download URL (valid 7 days). Use this to host a screenshot/PDF/CSV for embedding in a PR body or sharing with a human — do NOT use external file hosts (imgur, 0x0.st, transfer.sh, catbox). Returns the URL as text.",
     inputSchema: {
       type: "object",
       properties: {
-        sandbox_name: { type: "string", description: "Sandbox label (kept for back-compat; routing is by session_id)." },
+        sandbox_name: { type: "string", description: "Label of the provisioned sandbox the file lives in" },
         path: { type: "string", description: "Absolute path of the file inside the sandbox, e.g. /home/user/keys.png" },
         name: { type: "string", description: "Optional artifact filename (defaults to the basename of path)" },
-        session_id: SESSION_ID_PROP,
+        session_id: { type: "string", description: "LAP session ID — required only when the SESSION_ID env var is not set" },
       },
       required: ["sandbox_name", "path"],
     },
@@ -137,94 +117,15 @@ function buildProxyUrl() {
   } catch { return VAULT_URL; }
 }
 
-// ── Session-scoped sandbox ownership (direct-e2b mode) ─────────────────────
-// On a cache miss we hit /sandbox-id. The session row is authoritative; the
-// Map is only an in-process accelerator.
-
-function resolveSessionId(args) {
-  // SESSION_ID env wins when set (platform mode keeps existing behavior); else
-  // the tool-call arg is required. In the inline harness there is no other way
-  // for the MCP server to know which session is calling.
-  return ENV_SESSION_ID ?? (args && args.session_id) ?? null;
-}
-
-async function getStoredSandboxId(sid) {
-  const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${sid}/sandbox-id`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  });
-  if (!res.ok) {
-    if (res.status === 404) return null;
-    throw new Error(`GET /sandbox-id ${res.status}`);
-  }
-  const j = await res.json();
-  return j.sandbox_id ?? null;
-}
-
-async function setStoredSandboxId(sid, sandbox_id) {
-  const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${sid}/sandbox-id`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ sandbox_id }),
-  });
-  if (!res.ok) throw new Error(`PUT /sandbox-id ${res.status}`);
-}
-
-async function clearStoredSandboxId(sid) {
-  await fetch(`${BASE}/api/v1/managed_agents/sessions/${sid}/sandbox-id`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  }).catch(() => {});
-}
-
-// Returns a usable Sandbox for this session, or null if none is registered or
-// the registered one is no longer alive on e2b. Side effect: refreshes the
-// keepalive timer on a hit (so the agent's next think doesn't reap it).
-async function getSandboxFor(sid) {
-  const cached = sessionSandboxes.get(sid);
-  if (cached) {
-    try { await cached.setTimeout(SANDBOX_TIMEOUT_MS); } catch {}
-    return cached;
-  }
-  if (!BASE || !TOKEN) return null;
-  let stored;
-  try { stored = await getStoredSandboxId(sid); } catch (e) {
-    console.error(`[sandbox-mcp] GET /sandbox-id failed for ${sid}: ${e.message}`);
-    return null;
-  }
-  if (!stored) return null;
-  try {
-    const sandbox = await Sandbox.connect(stored, { apiKey: E2B_API_KEY });
-    await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
-    sessionSandboxes.set(sid, sandbox);
-    return sandbox;
-  } catch (e) {
-    // Stored id points at a dead/reaped sandbox — clear it so the next provision
-    // creates a fresh one cleanly.
-    console.error(`[sandbox-mcp] reconnect to ${stored} failed for ${sid}: ${e.message}; clearing stored id`);
-    await clearStoredSandboxId(sid);
-    return null;
-  }
-}
-
-async function killSandboxFor(sid) {
-  const sb = sessionSandboxes.get(sid);
-  sessionSandboxes.delete(sid);
-  if (sb) { try { await sb.kill(); } catch {} }
-  await clearStoredSandboxId(sid);
-}
-
-// ── Tool implementations ───────────────────────────────────────────────────
-
-async function provision({ name, project_id, session_id }) {
-  if (USE_DIRECT) {
+async function provision({ name, project_id, session_id: callSessionId }) {
+  const effectiveSid = ENV_SESSION_ID || callSessionId;
+  // Use platform path when a session_id is available and LAP_BASE_URL is set.
+  // This routes through e2b.ts which injects agent env var stubs (e.g. GITHUB_TOKEN)
+  // so the vault proxy can swap them for real values on HTTPS egress.
+  if (USE_DIRECT && !(effectiveSid && BASE)) {
     if (!E2B_API_KEY) return textResult("provision failed: E2B_API_KEY not set", true);
-    const sid = resolveSessionId({ session_id });
-    if (!sid) return textResult("provision failed: session_id is required in the inline-shared harness", true);
-    // Idempotent: if the session already has a usable sandbox, return it.
-    const existing = await getSandboxFor(sid);
-    if (existing) {
-      return textResult(`sandbox "${name ?? "main"}" already provisioned for this session (${existing.sandboxId}, template ${E2B_TEMPLATE})`);
-    }
+    const existing = sandboxes.get(name);
+    if (existing) { try { await existing.kill(); } catch {} }
     try {
       const proxyUrl = buildProxyUrl();
       const sandbox = await Sandbox.create(E2B_TEMPLATE, {
@@ -232,44 +133,38 @@ async function provision({ name, project_id, session_id }) {
         timeoutMs: SANDBOX_TIMEOUT_MS,
         envs: proxyUrl ? { HTTPS_PROXY: proxyUrl, HTTP_PROXY: proxyUrl } : {},
       });
-      sessionSandboxes.set(sid, sandbox);
-      try { await setStoredSandboxId(sid, sandbox.sandboxId); }
-      catch (e) {
-        // Persistence failed — keep the cache entry so this call still works,
-        // but log loudly: a subsequent call without the cache (e.g. after a
-        // restart) won't find the sandbox.
-        console.error(`[sandbox-mcp] WARN: failed to persist sandbox_id for ${sid}: ${e.message}`);
-      }
-      console.error(`[sandbox-mcp] provisioned direct: ${sandbox.sandboxId} session=${sid} template=${E2B_TEMPLATE}`);
-      return textResult(`sandbox "${name ?? "main"}" ready (${sandbox.sandboxId}, template ${E2B_TEMPLATE})`);
+      sandboxes.set(name, sandbox);
+      console.error(`[sandbox-mcp] provisioned direct: ${sandbox.sandboxId} template=${E2B_TEMPLATE}`);
+      return textResult(`sandbox "${name}" ready (${sandbox.sandboxId}, template ${E2B_TEMPLATE})`);
     } catch (e) {
       return textResult(`provision error: ${e instanceof Error ? e.message : String(e)}`, true);
     }
   }
   try {
-    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${ENV_SESSION_ID}/sandbox/provision`, {
+    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${effectiveSid}/sandbox/provision`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify({ name, project_id }),
     });
     const json = await res.json();
     if (!res.ok) return textResult(`provision failed: ${json.error ?? `HTTP ${res.status}`}`, true);
+    if (callSessionId) sandboxSessionIds.set(name, callSessionId);
     return textResult(json.message ?? "sandbox provisioned");
   } catch (e) {
     return textResult(`provision error: ${e instanceof Error ? e.message : String(e)}`, true);
   }
 }
 
-async function execute({ sandbox_name, cmd, session_id }) {
-  if (USE_DIRECT) {
-    const sid = resolveSessionId({ session_id });
-    if (!sid) return textResult("execute failed: session_id is required in the inline-shared harness", true);
-    const sandbox = await getSandboxFor(sid);
-    if (!sandbox) return textResult(`execute failed: no sandbox for this session — call provision first`, true);
+async function execute({ sandbox_name, cmd }) {
+  const platformSid = ENV_SESSION_ID || sandboxSessionIds.get(sandbox_name);
+  if (USE_DIRECT && !platformSid) {
+    const sandbox = sandboxes.get(sandbox_name);
+    if (!sandbox) return textResult(`execute failed: no sandbox "${sandbox_name}" — call provision first`, true);
     try {
       // Keepalive: reset the shutdown timer to a fresh full window BEFORE running
       // so the sandbox can't expire mid-command or during the agent's next think
-      // step. (`getSandboxFor` already touched it, but the cached path skips it.)
+      // step. Without this, E2B reaps the sandbox SANDBOX_TIMEOUT_MS after
+      // creation regardless of activity, wiping the repo/build/running proxy.
       await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
       const result = await sandbox.commands.run(cmd, { timeoutMs: EXECUTE_TIMEOUT_MS });
       const out = (result.stdout ?? "") + (result.stderr ?? "");
@@ -283,7 +178,7 @@ async function execute({ sandbox_name, cmd, session_id }) {
     }
   }
   try {
-    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${ENV_SESSION_ID}/sandbox/execute`, {
+    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${platformSid}/sandbox/execute`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify({ sandbox_name, cmd }),
@@ -298,14 +193,13 @@ async function execute({ sandbox_name, cmd, session_id }) {
 
 const READ_FILE_MAX_BYTES = 256 * 1024;
 
-async function readFile({ sandbox_name, path, session_id }) {
-  if (USE_DIRECT) {
-    const sid = resolveSessionId({ session_id });
-    if (!sid) return textResult("read_file failed: session_id is required in the inline-shared harness", true);
-    const sandbox = await getSandboxFor(sid);
-    if (!sandbox) return textResult(`read_file failed: no sandbox for this session — call provision first`, true);
+async function readFile({ sandbox_name, path }) {
+  const platformSid = ENV_SESSION_ID || sandboxSessionIds.get(sandbox_name);
+  if (USE_DIRECT && !platformSid) {
+    const sandbox = sandboxes.get(sandbox_name);
+    if (!sandbox) return textResult(`read_file failed: no sandbox "${sandbox_name}" — call provision first`, true);
     try {
-      await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
+      await sandbox.setTimeout(SANDBOX_TIMEOUT_MS); // keepalive (see execute)
       const content = await sandbox.files.read(path);
       if (content.length > READ_FILE_MAX_BYTES)
         return textResult(`error: file too large to return inline (${content.length} bytes > ${READ_FILE_MAX_BYTES}). Read a smaller slice or split it.`, true);
@@ -315,7 +209,7 @@ async function readFile({ sandbox_name, path, session_id }) {
     }
   }
   try {
-    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${ENV_SESSION_ID}/sandbox/read-file`, {
+    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${platformSid}/sandbox/read-file`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify({ sandbox_name, path }),
@@ -344,15 +238,16 @@ function mimeForPath(p) {
 }
 
 // Read a sandbox file's bytes as base64 — works in both modes: direct-e2b reads
-// the bytes through the session's sandbox handle; platform mode shells out to
+// the bytes locally via the held sandbox handle; platform mode shells out to
 // `base64` inside the sandbox (binary-safe, since we transport the text).
-async function readBase64(sandbox, sandbox_name, path, sid) {
+async function readBase64({ sandbox_name, path, session_id }) {
+  const sandbox = sandboxes.get(sandbox_name);
   if (sandbox) {
-    await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
+    await sandbox.setTimeout(SANDBOX_TIMEOUT_MS); // keepalive (see execute)
     const bytes = await sandbox.files.read(path, { format: "bytes" });
     return Buffer.from(bytes).toString("base64");
   }
-  const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${sid}/sandbox/execute`, {
+  const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${session_id}/sandbox/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
     body: JSON.stringify({ sandbox_name, cmd: `base64 -w0 ${JSON.stringify(path)}` }),
@@ -363,15 +258,13 @@ async function readBase64(sandbox, sandbox_name, path, sid) {
 }
 
 async function uploadArtifact({ sandbox_name, path, name, session_id }) {
-  const sid = resolveSessionId({ session_id });
-  if (!sid) return textResult("upload_artifact failed: session_id is required (SESSION_ID env not set and none passed)", true);
+  const sid = ENV_SESSION_ID ?? session_id;
+  if (!sid) return textResult("upload_artifact failed: no session_id (SESSION_ID env not set and none passed)", true);
   if (!BASE) return textResult("upload_artifact failed: LAP_BASE_URL not set", true);
   const fname = name || path.split("/").pop() || "artifact";
   let content;
   try {
-    const sandbox = USE_DIRECT ? await getSandboxFor(sid) : null;
-    if (USE_DIRECT && !sandbox) return textResult("upload_artifact failed: no sandbox for this session — call provision first", true);
-    content = await readBase64(sandbox, sandbox_name, path, sid);
+    content = await readBase64({ sandbox_name, path, session_id: sid });
   } catch (e) {
     return textResult(`upload_artifact error reading ${path}: ${e instanceof Error ? e.message : String(e)}`, true);
   }
@@ -394,18 +287,9 @@ async function uploadArtifact({ sandbox_name, path, name, session_id }) {
 let cleaningUp = false;
 async function cleanupAll() {
   if (cleaningUp) return; cleaningUp = true;
-  // Intentionally do NOT kill the sandboxes or clear their stored ids on
-  // harness shutdown. The session row still owns each sandbox by id; on the
-  // next deploy a fresh harness will reconnect via `getSandboxFor` and the
-  // session keeps its repo / running proxy / state across the restart. E2B's
-  // 30-min idle reap takes care of sandboxes whose sessions never come back.
-  sessionSandboxes.clear();
+  await Promise.all([...sandboxes.values()].map(s => s.kill().catch(() => {})));
+  sandboxes.clear();
 }
-// `killSandboxFor` is defined above for the future case where a session ends
-// (status flips to dead/done) and we want to actively release the e2b sandbox
-// rather than wait for the 30-min idle reap. That lifecycle event lives in
-// the platform, not in this MCP server, so the call site is a follow-up.
-void killSandboxFor;
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => cleanupAll().finally(() => process.exit(0)));
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {

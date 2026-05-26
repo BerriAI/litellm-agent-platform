@@ -57,6 +57,7 @@ export const PATCH = wrap<RouteContext>(async (req, ctx) => {
   if (body.projects !== undefined) data.projects = body.projects as Prisma.InputJsonValue;
   if (body.allow_out !== undefined) data.allow_out = body.allow_out as Prisma.InputJsonValue;
   if (body.deny_out !== undefined) data.deny_out = body.deny_out as Prisma.InputJsonValue;
+  if (body.sandbox_files !== undefined) data.sandbox_files = body.sandbox_files as Prisma.InputJsonValue;
 
   const existing = await prisma.agent.findUnique({ where: { agent_id } });
   if (existing === null) httpError(404, `agent '${agent_id}' not found`);
@@ -164,7 +165,7 @@ export const PATCH = wrap<RouteContext>(async (req, ctx) => {
   // recycling warm tasks here, a user shrinking the limit from 10 → 0
   // would still see 10 ranked rows in the next session if a warm pod gets
   // claimed. Cheap: warm pool reconciler refills in <2s.
-  if (body.preload_memory_limit !== undefined) {
+  if (body.preload_memory_limit !== undefined || body.env_vars !== undefined) {
     await invalidateWarmTasks(agent_id);
   }
   return Response.json(toApiAgent(updated));

@@ -37,7 +37,7 @@ export async function GET(req: Request) {
     const started = Date.now();
 
     // Provision a throwaway sandbox
-    const id = await provider.create({ session_id: "test", agent: {} as never });
+    const { id } = await provider.create({ session_id: "test", agent: {} as never });
     const provisionMs = Date.now() - started;
 
     // Measure CPU + RAM

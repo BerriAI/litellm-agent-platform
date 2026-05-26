@@ -8,7 +8,7 @@ export interface ProvisionParams {
 
 export abstract class SandboxProvider {
   abstract readonly urlScheme: string;
-  abstract create(params: ProvisionParams): Promise<string>;
+  abstract create(params: ProvisionParams): Promise<{ id: string; envMap: Record<string, string> }>;
   abstract execute(id: string, cmd: string, timeoutMs: number): Promise<string>;
   /**
    * Read a file out of the sandbox and return its UTF-8 text content. Powers

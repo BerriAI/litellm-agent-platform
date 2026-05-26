@@ -93,6 +93,10 @@ export default function AgentDetailPage({ params }: PageProps) {
   const [syncing, setSyncing] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
 
+  const [setupScriptEditing, setSetupScriptEditing] = useState(false);
+  const [setupScript, setSetupScript] = useState("");
+  const [setupScriptSaving, setSetupScriptSaving] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -173,6 +177,40 @@ export default function AgentDetailPage({ params }: PageProps) {
     },
     [agent],
   );
+
+  function currentSetupScript(a: typeof agent): string {
+    const entry = (a?.sandbox_files ?? []).find((f) => f.name === "setup.sh");
+    if (!entry) return "";
+    try {
+      const bytes = Uint8Array.from(atob(entry.content), (c) => c.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    } catch { return entry.content; }
+  }
+
+  function openSetupScriptEditor() {
+    setSetupScript(currentSetupScript(agent));
+    setSetupScriptEditing(true);
+  }
+
+  async function handleSetupScriptSave() {
+    if (!agent || setupScriptSaving) return;
+    setSetupScriptSaving(true);
+    setError(null);
+    try {
+      const existing = (agent.sandbox_files ?? []).filter((f) => f.name !== "setup.sh");
+      const encoded = btoa(unescape(encodeURIComponent(setupScript)));
+      const files = setupScript.trim()
+        ? [...existing, { name: "setup.sh", sandbox_path: "/lap/setup.sh", content: encoded, content_type: "application/x-sh", size: new TextEncoder().encode(setupScript).length }]
+        : existing;
+      const updated = await updateAgent(agent.id, { sandbox_files: files });
+      setAgent(updated);
+      setSetupScriptEditing(false);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSetupScriptSaving(false);
+    }
+  }
 
   async function handleTemplateSync() {
     if (!agent || syncing) return;
@@ -528,6 +566,48 @@ export default function AgentDetailPage({ params }: PageProps) {
                   onSave={handleEnvVarsSave}
                   onError={(msg) => setError(msg)}
                 />
+              </dd>
+
+              <dt className="pt-1 text-muted-foreground">Setup script</dt>
+              <dd className="min-w-0">
+                {setupScriptEditing ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={setupScript}
+                      onChange={(e) => setSetupScript(e.target.value)}
+                      rows={8}
+                      disabled={setupScriptSaving}
+                      className="w-full rounded-md border bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                      placeholder={"#!/usr/bin/env bash\n# Runs in the E2B sandbox at provision time.\n# Write env vars to /tmp/lap_env:\n# echo \"DATABASE_URL=...\" >> /tmp/lap_env"}
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => void handleSetupScriptSave()} disabled={setupScriptSaving}>
+                        {setupScriptSaving ? "Saving…" : "Save"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setSetupScriptEditing(false)} disabled={setupScriptSaving}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  (() => {
+                    const script = currentSetupScript(agent);
+                    return (
+                      <div className="flex items-start gap-2">
+                        {script ? (
+                          <pre className="max-h-32 flex-1 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
+                            {script}
+                          </pre>
+                        ) : (
+                          <span className="text-[13px] text-muted-foreground">None</span>
+                        )}
+                        <Button size="sm" variant="ghost" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={openSetupScriptEditor}>
+                          <Pencil className="size-3.5" />
+                        </Button>
+                      </div>
+                    );
+                  })()
+                )}
               </dd>
 
               {agent.prompt?.trim() ? (() => {
