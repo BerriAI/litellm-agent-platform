@@ -85,6 +85,7 @@ const EnvSchema = z.object({
   DAYTONA_API_URL: z.string().url().optional(),
   DAYTONA_SNAPSHOT: z.string().min(1).optional(),
   DAYTONA_IMAGE: z.string().min(1).optional(),
+  DAYTONA_MEMORY: z.coerce.number().int().positive().optional(),
   SANDBOX_CHOICE: z.enum(["e2b", "daytona"]).optional(),
   VAULT_URL: z.string().url().optional(),
   VAULT_PROXY_TOKEN: z.string().min(1).optional(),
