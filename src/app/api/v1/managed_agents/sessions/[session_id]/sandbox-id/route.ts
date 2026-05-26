@@ -11,8 +11,10 @@
  * fresh sandbox when this column is null. That also survives a harness
  * restart, because the e2b sandbox itself outlives the harness process.
  *
- * Auth: same shape as the rest of this session sub-tree — `assertAuth` admits
- * the master key (UI/CLI callers) and any valid agent token.
+ * Auth: `assertAuth` — master key only (UI/CLI callers). If agent-token
+ * support is needed here later, switch to `assertAgentScopeOrMaster` with
+ * a "sandbox" scope. The harness today uses `LAP_AUTH_TOKEN ?? MASTER_KEY`
+ * for this endpoint, so it must be configured with the master key.
  *
  * Body for PUT: { sandbox_id: string }
  */
