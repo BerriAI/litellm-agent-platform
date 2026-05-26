@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 /**
- * Two modes:
- * 1. Platform delegation: SESSION_ID + LAP_BASE_URL set → calls platform API
- * 2. Direct E2B fallback: SESSION_ID missing (inline) → E2B direct + vault proxy
+ * Sandbox MCP — provision/execute/read_file/upload_artifact tools.
+ *
+ * One mode: platform delegation. Every call routes through the LAP platform
+ * endpoint (`/api/v1/managed_agents/sessions/<sid>/sandbox/...`), which picks a
+ * provider from the SandboxProvider registry (Daytona, E2B, …) based on
+ * SANDBOX_CHOICE on the platform. The agent supplies `session_id` from the
+ * <lap_session_id> tag in its context, OR the harness env injects SESSION_ID.
+ *
+ * The previous direct-E2B fallback was removed when the platform-side Daytona
+ * provider became authoritative — duplicating SDK calls inside the MCP added
+ * drift risk and a second place to keep up with provider changes.
  */
 
-import { Sandbox } from "e2b";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -13,28 +20,21 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 const BASE = process.env.LAP_BASE_URL;
 const ENV_SESSION_ID = process.env.SESSION_ID;
 const TOKEN = process.env.LAP_AUTH_TOKEN ?? process.env.MASTER_KEY;
-const E2B_API_KEY = process.env.E2B_API_KEY;
-const E2B_TEMPLATE = process.env.E2B_TEMPLATE || "base";
-const VAULT_URL = process.env.VAULT_URL;
-const VAULT_PROXY_TOKEN = process.env.VAULT_PROXY_TOKEN;
-// E2B auto-shuts a sandbox this long after its shutdown timer was last set. We
-// reset that timer on every execute/read (keepalive, see below), so in practice
-// this is "max idle before reaping", not a hard cap on total task time. 30 min
-// tolerates long thinking gaps between tool calls without leaving zombies.
-const SANDBOX_TIMEOUT_MS = 1_800_000;
-// Per-command cap. A single step like a UI screenshot (cold chromium launch +
-// lazy-compiled route + login + render) can run past 2 min; 120s silently
-// terminated those mid-flight. 3 min gives that flow margin without leaving a
-// genuinely hung command running much longer.
-const EXECUTE_TIMEOUT_MS = 180_000;
 
-const USE_DIRECT = !ENV_SESSION_ID;
-const sandboxes = new Map();
 // Sandboxes provisioned via the platform path (session_id passed at provision time).
 // Keyed by sandbox name → platform session_id so execute/read_file can route correctly.
 const sandboxSessionIds = new Map();
 
-console.error(`[sandbox-mcp] mode=${USE_DIRECT ? "direct-e2b" : "platform"} template=${E2B_TEMPLATE} vault=${VAULT_URL ? "set" : "none"}`);
+// Centralised "no session" error so all four tools give the agent the same hint.
+function missingSessionError(tool) {
+  return textResult(
+    `${tool} failed: no session_id available. Pass session_id from the ` +
+      `<lap_session_id> tag in your context (and ensure LAP_BASE_URL is set).`,
+    true,
+  );
+}
+
+console.error(`[sandbox-mcp] mode=platform base=${BASE || "<unset>"} session_env=${ENV_SESSION_ID ? "set" : "unset"}`);
 
 const server = new Server({ name: "opencode-sandbox", version: "1.0.0" }, { capabilities: { tools: {} } });
 
@@ -106,40 +106,12 @@ function textResult(text, isError = false) {
   return { content: [{ type: "text", text }], isError };
 }
 
-function buildProxyUrl() {
-  if (!VAULT_URL) return null;
-  if (!VAULT_PROXY_TOKEN) return VAULT_URL;
-  try {
-    const u = new URL(VAULT_URL);
-    u.username = "x";
-    u.password = VAULT_PROXY_TOKEN;
-    return u.toString();
-  } catch { return VAULT_URL; }
-}
-
 async function provision({ name, project_id, session_id: callSessionId }) {
   const effectiveSid = ENV_SESSION_ID || callSessionId;
-  // Use platform path when a session_id is available and LAP_BASE_URL is set.
-  // This routes through e2b.ts which injects agent env var stubs (e.g. GITHUB_TOKEN)
-  // so the vault proxy can swap them for real values on HTTPS egress.
-  if (USE_DIRECT && !(effectiveSid && BASE)) {
-    if (!E2B_API_KEY) return textResult("provision failed: E2B_API_KEY not set", true);
-    const existing = sandboxes.get(name);
-    if (existing) { try { await existing.kill(); } catch {} }
-    try {
-      const proxyUrl = buildProxyUrl();
-      const sandbox = await Sandbox.create(E2B_TEMPLATE, {
-        apiKey: E2B_API_KEY,
-        timeoutMs: SANDBOX_TIMEOUT_MS,
-        envs: proxyUrl ? { HTTPS_PROXY: proxyUrl, HTTP_PROXY: proxyUrl } : {},
-      });
-      sandboxes.set(name, sandbox);
-      console.error(`[sandbox-mcp] provisioned direct: ${sandbox.sandboxId} template=${E2B_TEMPLATE}`);
-      return textResult(`sandbox "${name}" ready (${sandbox.sandboxId}, template ${E2B_TEMPLATE})`);
-    } catch (e) {
-      return textResult(`provision error: ${e instanceof Error ? e.message : String(e)}`, true);
-    }
-  }
+  if (!effectiveSid || !BASE) return missingSessionError("provision");
+  // Platform-mode only: the platform's sandbox endpoint routes to the configured
+  // provider (Daytona/E2B per SANDBOX_CHOICE) and injects agent env var stubs so
+  // the vault proxy can swap them for real values on HTTPS egress.
   try {
     const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${effectiveSid}/sandbox/provision`, {
       method: "POST",
@@ -157,26 +129,7 @@ async function provision({ name, project_id, session_id: callSessionId }) {
 
 async function execute({ sandbox_name, cmd }) {
   const platformSid = ENV_SESSION_ID || sandboxSessionIds.get(sandbox_name);
-  if (USE_DIRECT && !platformSid) {
-    const sandbox = sandboxes.get(sandbox_name);
-    if (!sandbox) return textResult(`execute failed: no sandbox "${sandbox_name}" — call provision first`, true);
-    try {
-      // Keepalive: reset the shutdown timer to a fresh full window BEFORE running
-      // so the sandbox can't expire mid-command or during the agent's next think
-      // step. Without this, E2B reaps the sandbox SANDBOX_TIMEOUT_MS after
-      // creation regardless of activity, wiping the repo/build/running proxy.
-      await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
-      const result = await sandbox.commands.run(cmd, { timeoutMs: EXECUTE_TIMEOUT_MS });
-      const out = (result.stdout ?? "") + (result.stderr ?? "");
-      const code = result.exitCode ?? 0;
-      return code === 0 ? textResult(out) : textResult(`${out}\n[exit ${code}]`, true);
-    } catch (e) {
-      const err = e && typeof e === "object" ? e : {};
-      const out = (err.stdout ?? "") + (err.stderr ?? "");
-      const msg = e instanceof Error ? e.message : String(e);
-      return textResult(out ? `${out}\n[failed: ${msg}]` : `execute error: ${msg}`, true);
-    }
-  }
+  if (!platformSid || !BASE) return missingSessionError("execute");
   try {
     const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${platformSid}/sandbox/execute`, {
       method: "POST",
@@ -191,23 +144,9 @@ async function execute({ sandbox_name, cmd }) {
   }
 }
 
-const READ_FILE_MAX_BYTES = 256 * 1024;
-
 async function readFile({ sandbox_name, path }) {
   const platformSid = ENV_SESSION_ID || sandboxSessionIds.get(sandbox_name);
-  if (USE_DIRECT && !platformSid) {
-    const sandbox = sandboxes.get(sandbox_name);
-    if (!sandbox) return textResult(`read_file failed: no sandbox "${sandbox_name}" — call provision first`, true);
-    try {
-      await sandbox.setTimeout(SANDBOX_TIMEOUT_MS); // keepalive (see execute)
-      const content = await sandbox.files.read(path);
-      if (content.length > READ_FILE_MAX_BYTES)
-        return textResult(`error: file too large to return inline (${content.length} bytes > ${READ_FILE_MAX_BYTES}). Read a smaller slice or split it.`, true);
-      return textResult(content);
-    } catch (e) {
-      return textResult(`read_file error: ${e instanceof Error ? e.message : String(e)}`, true);
-    }
-  }
+  if (!platformSid || !BASE) return missingSessionError("read_file");
   try {
     const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${platformSid}/sandbox/read-file`, {
       method: "POST",
@@ -237,16 +176,10 @@ function mimeForPath(p) {
   return MIME_BY_EXT[ext] || "application/octet-stream";
 }
 
-// Read a sandbox file's bytes as base64 — works in both modes: direct-e2b reads
-// the bytes locally via the held sandbox handle; platform mode shells out to
-// `base64` inside the sandbox (binary-safe, since we transport the text).
+// Read a sandbox file's bytes as base64 by shelling out to `base64` inside the
+// sandbox (binary-safe — we only transport the text). Goes through the platform's
+// /execute endpoint so the active provider (Daytona/E2B/…) handles it.
 async function readBase64({ sandbox_name, path, session_id }) {
-  const sandbox = sandboxes.get(sandbox_name);
-  if (sandbox) {
-    await sandbox.setTimeout(SANDBOX_TIMEOUT_MS); // keepalive (see execute)
-    const bytes = await sandbox.files.read(path, { format: "bytes" });
-    return Buffer.from(bytes).toString("base64");
-  }
   const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${session_id}/sandbox/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
@@ -284,13 +217,9 @@ async function uploadArtifact({ sandbox_name, path, name, session_id }) {
   }
 }
 
-let cleaningUp = false;
-async function cleanupAll() {
-  if (cleaningUp) return; cleaningUp = true;
-  await Promise.all([...sandboxes.values()].map(s => s.kill().catch(() => {})));
-  sandboxes.clear();
-}
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => cleanupAll().finally(() => process.exit(0)));
+// No local sandbox handles to tear down anymore — the platform owns lifecycle.
+// Graceful exit on signal so the MCP doesn't hold the harness up.
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;

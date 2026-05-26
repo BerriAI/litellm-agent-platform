@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "stdio MCP server giving the opencode harness E2B provision/execute tools",
+  "description": "stdio MCP server giving the opencode harness sandbox provision/execute tools (delegates to the LAP platform; provider selection — Daytona/E2B/… — is platform-side via SANDBOX_CHOICE)",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "e2b": "^1.13.2",
     "undici": "^7.0.0"
   }
 }
