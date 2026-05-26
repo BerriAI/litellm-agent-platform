@@ -1146,26 +1146,60 @@ export async function waitHttpReady(
   const deadline = Date.now() + timeout_ms;
   const probeUrl = `${sandbox_url.replace(/\/+$/, "")}/session`;
   let lastError: unknown = null;
+  let attempt = 0;
+  const errorCounts: Record<string, number> = {};
 
   while (Date.now() < deadline) {
+    attempt++;
     try {
       const res = await fetch(probeUrl, {
         method: "GET",
         signal: AbortSignal.timeout(HTTP_PROBE_TIMEOUT_MS),
       });
-      if (res.status < 500) return;
+
+      if (res.status < 500) {
+        // 2xx, 3xx, 4xx responses indicate the harness is responding
+        // (4xx usually means auth issues, which is fine — harness is up)
+        console.log(`waitHttpReady: probe ${attempt} succeeded (status ${res.status})`);
+        return;
+      }
+
       lastError = new Error(`status ${res.status}`);
+      errorCounts[`http_${res.status}`] = (errorCounts[`http_${res.status}`] ?? 0) + 1;
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       lastError = err;
+
+      // Classify connection errors for better diagnostics
+      const errType = errMsg.includes("ECONNREFUSED")
+        ? "connection_refused"
+        : errMsg.includes("ECONNRESET")
+          ? "connection_reset"
+          : errMsg.includes("ETIMEDOUT")
+            ? "connect_timeout"
+            : errMsg.includes("timeout")
+              ? "probe_timeout"
+              : "network_error";
+
+      errorCounts[errType] = (errorCounts[errType] ?? 0) + 1;
+
+      if (attempt === 1) {
+        console.log(`waitHttpReady: first probe attempt failed (${errType}): ${errMsg}`);
+      }
     }
     await sleep(POLL_HTTP_INTERVAL_MS);
   }
 
-  const detail =
-    lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(
-    `sandbox never ready at ${probeUrl} within ${timeout_ms}ms: ${detail}`,
-  );
+  // Generate detailed diagnostic message
+  const errorSummary = Object.entries(errorCounts)
+    .map(([type, count]) => `${type}(${count})`)
+    .join(", ");
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  const diagnose = `sandbox never ready at ${probeUrl} within ${timeout_ms}ms after ${attempt} probes (last error: ${detail}, pattern: ${errorSummary || "unknown"})`;
+
+  console.error(diagnose);
+  throw new Error(diagnose);
 }
 
 // ---------------------------------------------------------------------------

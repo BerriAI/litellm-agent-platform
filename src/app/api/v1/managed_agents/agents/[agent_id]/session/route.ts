@@ -157,7 +157,14 @@ function classifySpawnError(e: unknown): string {
   const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
   if (msg.includes("cni") || msg.includes("ip exhaustion")) return "cni_exhaustion";
   if (msg.includes("never reached running")) return "pod_timeout";
-  if (msg.includes("never ready at")) return "harness_timeout";
+  if (msg.includes("never ready at")) {
+    // Distinguish between different harness readiness failures
+    if (msg.includes("connection_refused")) return "harness_not_listening";
+    if (msg.includes("connection_reset")) return "harness_connection_reset";
+    if (msg.includes("probe_timeout")) return "harness_unresponsive";
+    if (msg.includes("connect_timeout")) return "harness_network_unreachable";
+    return "harness_timeout";
+  }
   if (msg.includes("pod") && msg.includes("failed")) return "pod_failed";
   if (msg.includes("imagepull") || msg.includes("image pull")) return "image_pull";
   return "unknown";
