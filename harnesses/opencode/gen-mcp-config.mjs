@@ -105,7 +105,7 @@ if (issueBase && issueAccess) {
     environment: {
       LAP_BASE_URL: issueBase,
       LAP_ACCESS_TOKEN: issueAccess,
-      ...(process.env.AGENT_ID && { AGENT_ID: process.env.AGENT_ID }),
+      ...(process.env.SESSION_ID && { SESSION_ID: process.env.SESSION_ID }),
       ...(process.env.LAP_REFRESH_TOKEN && { LAP_REFRESH_TOKEN: process.env.LAP_REFRESH_TOKEN }),
       ...(process.env.HTTPS_PROXY && { HTTPS_PROXY: process.env.HTTPS_PROXY }),
       ...(process.env.NODE_EXTRA_CA_CERTS && { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS }),

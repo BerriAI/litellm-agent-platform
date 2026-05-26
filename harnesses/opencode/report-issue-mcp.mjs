@@ -10,8 +10,8 @@
  *
  * Env contract:
  *   LAP_BASE_URL       platform base URL
- *   SESSION_ID         current session UUID — optional at boot; used at call time
- *                      if session_id is not passed as a tool argument
+ *   SESSION_ID         current session UUID — optional at boot (not set on the
+ *                      shared inline harness); the agent passes it as a tool arg
  *   LAP_ACCESS_TOKEN   short-lived bearer (LAP_AUTH_TOKEN accepted for compat)
  *   LAP_REFRESH_TOKEN  optional long-lived bearer for /agent-auth/refresh
  *   HTTPS_PROXY        optional — vault sidecar proxy for credential swapping
@@ -45,8 +45,8 @@ function resolveEnv() {
   if (!base_url) missing.push("LAP_BASE_URL");
   if (!access_token) missing.push("LAP_ACCESS_TOKEN");
   if (missing.length > 0) return { env: null, missing };
-  // AGENT_ID is not required at boot — inline harness shares one process across
-  // agents. The agent passes its agent_id as a tool parameter instead.
+  // SESSION_ID is not required at boot — inline harness has no per-session env.
+  // The agent passes it as a tool parameter; K8s pods have it set in the env.
   return { env: { base_url, access_token, refresh_token }, missing: [] };
 }
 
@@ -145,55 +145,17 @@ async function callApi(env, method, url, body) {
 }
 
 // ---------------------------------------------------------------------------
-// agent_id resolver — accepts either a UUID or a human-readable agent name
-// (e.g. "Shin"). The agent's system prompt says "you are Shin", so it's natural
-// for the model to pass that as agent_id; previously this produced a hard 404
-// from /agents/shin/issues. Now we recognize non-UUID strings and look up the
-// real agent_id by name. Cached for the life of the process so a typical
-// session is one extra GET, not one per call.
-// ---------------------------------------------------------------------------
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// lowercased name → { id, expiresAt } — TTL'd so a rename or recreate during
-// the same MCP process lifetime doesn't permanently mis-route issue reports
-// to a stale UUID. Cheap to refresh; the lookup is rare on the happy path
-// (only fires when the agent passes its name instead of its id).
-const AGENT_ID_CACHE_TTL_MS = 5 * 60 * 1000;
-const _agentIdByName = new Map();
-
-async function resolveAgentId(env, idOrName) {
-  if (!idOrName) return null;
-  if (UUID_RE.test(idOrName)) return idOrName;
-  const key = idOrName.toLowerCase();
-  const cached = _agentIdByName.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.id;
-  // List all agents and filter client-side. Routed through `callApi` (not
-  // `retryCall`) so a stale access token gets refreshed transparently — a
-  // 401 here would otherwise leak through as a non-retryable failure and we'd
-  // fall back to the raw name, defeating the whole point of this lookup.
-  const res = await callApi(env, "GET", `${env.base_url}/api/v1/managed_agents/agents`, undefined);
-  if (!res.ok || !Array.isArray(res.data)) return idOrName; // surface the real error downstream
-  const hit = res.data.find((a) => (a.name ?? "").toLowerCase() === key);
-  if (hit?.id) {
-    _agentIdByName.set(key, { id: hit.id, expiresAt: Date.now() + AGENT_ID_CACHE_TTL_MS });
-    return hit.id;
-  }
-  return idOrName;
-}
-
-// ---------------------------------------------------------------------------
 // Tool implementation
 // ---------------------------------------------------------------------------
 
 async function callReportIssue(env, input) {
-  const agent_id = await resolveAgentId(env, process.env.AGENT_ID || input.agent_id);
-  if (!agent_id) return { isError: true, text: "report_issue: agent_id required" };
-  const url = `${env.base_url}/api/v1/managed_agents/agents/${agent_id}/issues`;
+  const session_id = process.env.SESSION_ID || input.session_id;
+  if (!session_id) return { isError: true, text: "report_issue: session_id required" };
+  const url = `${env.base_url}/api/v1/managed_agents/sessions/${session_id}/issues`;
   const res = await callApi(env, "POST", url, {
     title: input.title,
     body: input.body,
     severity: input.severity,
-    session_id: input.session_id,
   });
   if (!res.ok) {
     return {
@@ -208,11 +170,11 @@ async function callReportIssue(env, input) {
 }
 
 async function callListIssues(env, input) {
-  const agent_id = await resolveAgentId(env, process.env.AGENT_ID || input.agent_id);
-  if (!agent_id) return { isError: true, text: "list_issues: agent_id required" };
+  const session_id = process.env.SESSION_ID || input.session_id;
+  if (!session_id) return { isError: true, text: "list_issues: session_id required" };
   const qs = new URLSearchParams({ status: input.status ?? "open" });
   if (input.severity) qs.set("severity", input.severity);
-  const url = `${env.base_url}/api/v1/managed_agents/agents/${agent_id}/issues?${qs}`;
+  const url = `${env.base_url}/api/v1/managed_agents/sessions/${session_id}/issues?${qs}`;
   const res = await callApi(env, "GET", url, undefined);
   if (!res.ok) {
     return { isError: true, text: `list_issues failed (HTTP ${res.status}): ${res.error ?? JSON.stringify(res.data)}` };
@@ -227,9 +189,9 @@ async function callListIssues(env, input) {
 
 async function callUpdateIssue(env, input) {
   if (!input.issue_id) return { isError: true, text: "update_issue: issue_id is required" };
-  const agent_id = await resolveAgentId(env, process.env.AGENT_ID || input.agent_id);
-  if (!agent_id) return { isError: true, text: "update_issue: agent_id required" };
-  const url = `${env.base_url}/api/v1/managed_agents/agents/${agent_id}/issues/${input.issue_id}`;
+  const session_id = process.env.SESSION_ID || input.session_id;
+  if (!session_id) return { isError: true, text: "update_issue: session_id required" };
+  const url = `${env.base_url}/api/v1/managed_agents/sessions/${session_id}/issues/${input.issue_id}`;
   const body = {};
   if (input.status) body.status = input.status;
   if (input.severity) body.severity = input.severity;
@@ -268,11 +230,7 @@ const TOOLS = [
         },
         session_id: {
           type: "string",
-          description: "Session where this issue was observed — lets operators click through to the session for context.",
-        },
-        agent_id: {
-          type: "string",
-          description: "Your agent_id — visible in your system prompt. Required on the inline harness where AGENT_ID env var is not set.",
+          description: "Your current session_id — visible in your system prompt. Required on the inline harness where SESSION_ID env var is not set.",
         },
       },
       required: ["title"],
@@ -294,9 +252,9 @@ const TOOLS = [
           enum: ["info", "warning", "error", "critical"],
           description: "Optional severity filter.",
         },
-        agent_id: {
+        session_id: {
           type: "string",
-          description: "Your agent_id — visible in your system prompt.",
+          description: "Your current session_id — visible in your system prompt. Required on the inline harness where SESSION_ID env var is not set.",
         },
       },
     },
@@ -321,9 +279,9 @@ const TOOLS = [
           enum: ["info", "warning", "error", "critical"],
           description: "New severity.",
         },
-        agent_id: {
+        session_id: {
           type: "string",
-          description: "Your agent_id — visible in your system prompt.",
+          description: "Your current session_id — visible in your system prompt. Required on the inline harness where SESSION_ID env var is not set.",
         },
       },
       required: ["issue_id"],
