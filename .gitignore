@@ -55,3 +55,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+harnesses/opencode/opencode.json
