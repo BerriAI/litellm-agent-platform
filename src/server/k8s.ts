@@ -715,6 +715,7 @@ export async function runTask(
     kind: "Sandbox",
     metadata: { name, namespace: ns, labels },
     spec: {
+      service: true,
       podTemplate: {
         metadata: {
           labels: { ...labels, [LABEL_SANDBOX_NAME]: name },
