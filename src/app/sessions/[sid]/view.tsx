@@ -1017,7 +1017,7 @@ function MainPanel({
         />
       )}
 
-      {session && (
+      {session && assessment && (
         <ReviewerInlineCard
           assessment={assessment}
           loading={assessmentLoading}
