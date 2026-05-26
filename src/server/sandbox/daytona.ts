@@ -67,8 +67,10 @@ export class DaytonaProvider extends SandboxProvider {
 
     const envVars = { ...stubEnv, ...proxyEnv, ...vaultCaEnv };
 
+    // Resources (memory/CPU) are only supported on image-based sandboxes — the
+    // Daytona API rejects resource specs on snapshot-based creates.
     const resources =
-      this.memoryGib || this.cpu
+      this.image && (this.memoryGib || this.cpu)
         ? { ...(this.memoryGib ? { memory: this.memoryGib } : {}), ...(this.cpu ? { cpu: this.cpu } : {}) }
         : undefined;
 
@@ -81,7 +83,7 @@ export class DaytonaProvider extends SandboxProvider {
       );
     } else {
       sandbox = await this.daytona.create(
-        { snapshot: this.snapshot, envVars, autoStopInterval: 0, ...(resources ? { resources } : {}) },
+        { snapshot: this.snapshot, envVars, autoStopInterval: 0 },
         { timeout: 120 },
       );
     }

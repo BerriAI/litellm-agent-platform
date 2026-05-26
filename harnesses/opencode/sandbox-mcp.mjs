@@ -138,14 +138,14 @@ async function provision({ name, project_id }) {
       try {
         const proxyUrl = buildProxyUrl();
         const envVars = proxyUrl ? { HTTPS_PROXY: proxyUrl, HTTP_PROXY: proxyUrl } : {};
-        const resources = (DAYTONA_MEMORY_GIB || DAYTONA_CPU)
+        // Resources only supported on image-based sandboxes — Daytona rejects on snapshots.
+        const resources = DAYTONA_IMAGE && (DAYTONA_MEMORY_GIB || DAYTONA_CPU)
           ? { ...(DAYTONA_MEMORY_GIB ? { memory: DAYTONA_MEMORY_GIB } : {}), ...(DAYTONA_CPU ? { cpu: DAYTONA_CPU } : {}) }
           : undefined;
         const daytona = await getDaytona();
-        const base = { envVars, autoStopInterval: 0, ...(resources ? { resources } : {}) };
         const sandbox = DAYTONA_IMAGE
-          ? await daytona.create({ ...base, image: DAYTONA_IMAGE }, { timeout: 120 })
-          : await daytona.create({ ...base, snapshot: DAYTONA_SNAPSHOT }, { timeout: 120 });
+          ? await daytona.create({ image: DAYTONA_IMAGE, envVars, autoStopInterval: 0, ...(resources ? { resources } : {}) }, { timeout: 120 })
+          : await daytona.create({ snapshot: DAYTONA_SNAPSHOT, envVars, autoStopInterval: 0 }, { timeout: 120 });
         sandboxes.set(name, sandbox);
         console.error(`[sandbox-mcp] provisioned daytona: ${sandbox.id}`);
         return textResult(`sandbox "${name}" ready (id: \`${sandbox.id}\`, provider: daytona)`);
