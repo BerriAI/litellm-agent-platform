@@ -16,10 +16,16 @@ USER root
 # (PyNaCl→libsodium, psycopg2→libpq, cryptography→libssl/libffi)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git ca-certificates \
+      git ca-certificates curl \
       postgresql postgresql-client \
       libpq-dev libsodium-dev libssl-dev libffi-dev \
       python3-dev build-essential pkg-config \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
 # ── CA bundle ──────────────────────────────────────────────────────────────────
