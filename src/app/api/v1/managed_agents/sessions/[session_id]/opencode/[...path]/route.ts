@@ -211,9 +211,14 @@ async function proxy(req: Request, ctx: RouteContext): Promise<Response> {
     const cached = await resolveReady(session_id, req.signal);
     const target = `${cached.sandbox_url}/${tail}${search}`;
 
+    const harnessToken =
+      process.env.HARNESS_AUTH_TOKEN?.trim() ||
+      process.env.CONTAINER_ENV_HARNESS_AUTH_TOKEN?.trim() ||
+      "";
     const headers: Record<string, string> = {
       "content-type": req.headers.get("content-type") ?? "application/json",
       accept: req.headers.get("accept") ?? "*/*",
+      ...(harnessToken ? { authorization: `Bearer ${harnessToken}` } : {}),
     };
     const init: RequestInit = {
       method: req.method,
@@ -385,6 +390,7 @@ async function proxy(req: Request, ctx: RouteContext): Promise<Response> {
             console.warn(`[opencode-proxy] session=${session_id} stuck turn detected (tool no step-finish); aborting`);
             await fetch(`${cached.sandbox_url}/session/${cached.harness_session_id}/abort`, {
               method: "POST",
+              headers: harnessToken ? { authorization: `Bearer ${harnessToken}` } : {},
               signal: AbortSignal.timeout(5_000),
             }).catch(() => {});
             upstream = await fetch(target, { ...init, body: bodyBuf ?? undefined });
