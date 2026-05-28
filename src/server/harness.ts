@@ -286,6 +286,7 @@ export async function harnessListMessages(opts: {
   const url = `${sandbox_url}/session/${harness_session_id}/message`;
   const res = await fetchWithRetry(url, {
     method: "GET",
+    headers: harnessAuthHeaders(),
     signal: AbortSignal.timeout(timeout_ms),
   });
   if (!res.ok) {
