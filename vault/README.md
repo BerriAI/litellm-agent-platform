@@ -20,7 +20,20 @@ api.github.com
 4. Mints per-host TLS leaf certs on demand, signed by the CA.
 5. On every CONNECT, terminates TLS, scans headers + text-y bodies for known stubs, swaps each for the real value, forwards to upstream.
 
-## Deployment
+## Local dev quick start
+
+For a local kind cluster, run the bootstrap script — it generates a fresh CA, overwrites `vault/ca.crt` so the next harness rebuild bakes the matching cert, and applies the `vault-ca` TLS secret to the cluster:
+
+```bash
+bin/vault-ca-bootstrap-local.sh           # idempotent; existing material is reused
+bin/vault-ca-bootstrap-local.sh --force   # regenerate (e.g. after cluster recreate)
+```
+
+Override the target context with `KUBE_CONTEXT=...` (default: `kind-agent-sbx`).
+
+After running the script, rebuild the harness images so the new CA is in their trust store. The script reminds you of this.
+
+## Deployment (manual)
 
 - Generate a cluster CA once. Use `genpkey` for the private key — WebCrypto only imports PKCS#8, and OpenSSL 1.1.x's `req -newkey` emits PKCS#1 by default:
   ```
