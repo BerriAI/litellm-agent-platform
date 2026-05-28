@@ -507,6 +507,7 @@ export interface ApiAgent {
   /** Current template prompt text — the "after" side of the diff. Null if not template-derived. */
   template_latest_prompt: string | null;
   created_at: string;
+  workspace_pvc: string | null;
 }
 
 export interface ApiMemory {
@@ -950,6 +951,7 @@ export interface RunTaskOpts {
    * never logged or persisted.
    */
   env_vars?: Record<string, string>;
+  workspace_pvc_name?: string;
 }
 
 // `task_arn` here is the Sandbox CR name — kept as `task_arn` for symmetry
@@ -1121,6 +1123,7 @@ export function toApiAgent(row: AgentRow): ApiAgent {
       };
     })(),
     created_at: row.created_at.toISOString(),
+    workspace_pvc: row.workspace_pvc ?? null,
   };
 }
 

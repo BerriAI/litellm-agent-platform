@@ -29,6 +29,7 @@ import {
   stopTask,
   waitHttpReady,
   waitRunningGetUrl,
+  ensureWorkspacePvc,
 } from "@/server/k8s";
 import type { AgentRow, WarmTaskRow } from "@/server/types";
 
@@ -131,9 +132,15 @@ export async function provisionWarmTask(agent: AgentRow): Promise<void> {
 
   const start = Date.now();
   try {
+    const pvcName = await ensureWorkspacePvc(agent.agent_id);
+    if (!agent.workspace_pvc) {
+      await prisma.agent.update({ where: { agent_id: agent.agent_id }, data: { workspace_pvc: pvcName } });
+      agent.workspace_pvc = pvcName;
+    }
     const { task_arn } = await runTask({
       agent,
       warm_task_id: row.warm_task_id,
+      workspace_pvc_name: pvcName,
     });
     await prisma.warmTask.update({
       where: { warm_task_id: row.warm_task_id },

@@ -35,6 +35,7 @@ model Agent {
   projects            Json     @default("[]")
   task_definition_arn String
   container_port      Int      @default(4096)
+  workspace_pvc       String?
   /**
    * How many memories get pre-loaded into AGENT_PROMPT for this agent at
    * warm-task / cold-task launch. Pinned rows (Memory.pinned = true) are
