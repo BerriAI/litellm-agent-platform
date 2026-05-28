@@ -101,9 +101,21 @@ The endpoint is implemented at `src/app/api/v1/managed_agents/sessions/[session_
 
 The `docker compose up` / `bin/kind-up.sh` path in the README assumes a Linux/amd64 workstation. On an arm64 Mac (M1/M2/M3) the bring-up looks like it works but the very first session create fails. The order below is what actually lands a Claude Agent SDK pod and round-trips a message against a LiteLLM gateway.
 
-## 1. Build the harness image for arm64
+## 1. Build the harness images for arm64
 
-The upstream `harnesses/claude-agent-sdk/Dockerfile` pins `linux_amd64` deb / `x86_64-unknown-linux-gnu` uv binaries. On Apple Silicon, build using the local arm64 variant:
+The shorthand: build base first, then any harness(es) you need.
+
+```bash
+bin/build-harnesses-local-arm64.sh                          # base + claude-code + opencode + codex
+bin/build-harnesses-local-arm64.sh claude-code              # base + only claude-code
+```
+
+The script wraps the two arm64-specific quirks:
+
+- `--platform linux/arm64` — without this buildx picks the host arch.
+- `--provenance=false --sbom=false` — with attestation enabled, buildx emits an OCI manifest list that `kind load docker-image` accepts but the CRI plugin never indexes, so pods fail with `ErrImageNeverPull`. The flat single-arch image is the one CRI surfaces.
+
+For `claude-agent-sdk`, build using its arm64 variant (the upstream Dockerfile pins `linux_amd64` deb / `x86_64-unknown-linux-gnu` uv binaries):
 
 ```bash
 docker buildx build --platform linux/arm64 \
@@ -112,9 +124,7 @@ docker buildx build --platform linux/arm64 \
   -t claude-agent-sdk-sandbox:dev --load .
 ```
 
-`--provenance=false --sbom=false` is required: with attestation enabled, buildx emits an OCI manifest list that `kind load docker-image` accepts but the CRI plugin never indexes, so pods fail with `ErrImageNeverPull`. The flat single-arch image is the one CRI will surface.
-
-Then set `K8S_HARNESS_IMAGE=claude-agent-sdk-sandbox:dev` in `.env` (the default is `opencode-sandbox:dev`).
+Set the per-harness image var in `.env` (e.g. `K8S_HARNESS_IMAGE_CLAUDE_SDK=claude-agent-sdk-sandbox:dev`); `K8S_HARNESS_IMAGE` (default `opencode-sandbox:dev`) is the fallback for any harness that doesn't have its own override.
 
 ## 2. Get the image visible to the CRI plugin
 
