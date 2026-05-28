@@ -81,7 +81,7 @@ docker compose -f docker-compose.yml -f docker-compose.litellm.yml up
 The proxy listens on `:4000`. Point the platform at it via `.env`:
 
 ```dotenv
-LITELLM_API_BASE=http://host.docker.internal:4000
+LITELLM_API_BASE=http://litellm:4000
 LITELLM_API_KEY=sk-litellm-local-master  # must match master_key in litellm-config.yaml
 ```
 
