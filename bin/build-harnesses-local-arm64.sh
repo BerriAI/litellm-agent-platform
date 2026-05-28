@@ -66,5 +66,6 @@ done
 
 info "✓ done"
 info "built images:"
-docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' \
+printf "%-45s %-15s %s\n" "REPOSITORY:TAG" "CREATED" "SIZE"
+docker images --format '{{.Repository}}:{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' \
   | grep -E "harnesses/base|claude-code-sandbox|opencode-sandbox|codex-sandbox" || true
