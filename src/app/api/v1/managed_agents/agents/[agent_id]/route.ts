@@ -22,6 +22,7 @@ import {
 } from "@/server/types";
 import { wrap } from "@/server/route-helpers";
 import type { Prisma } from "@prisma/client";
+import { deleteWorkspacePvc } from "@/server/k8s";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -175,6 +176,7 @@ export const DELETE = wrap<RouteContext>(async (req, ctx) => {
   const { agent_id } = await ctx.params;
   const row = await prisma.agent.findUnique({ where: { agent_id } });
   if (row === null) httpError(404, `agent '${agent_id}' not found`);
+  await deleteWorkspacePvc(agent_id);
   await prisma.agent.delete({ where: { agent_id } });
   return new Response(null, { status: 204 });
 });

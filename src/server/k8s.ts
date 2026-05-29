@@ -211,7 +211,7 @@ export function inClusterSandboxUrl(task_arn: string, containerPort: number): st
  * Compress a UUID-shaped id into the ≤63-char DNS-1123 label namespace
  * required by Sandbox / Service names. The full id is preserved as a label.
  */
-function toName(prefix: "s" | "w", id: string): string {
+function toName(prefix: "s" | "w" | "ws", id: string): string {
   const compact = id.replace(/[^a-z0-9]/gi, "").toLowerCase();
   // 2 + 1 (dash) + up to 50 = 53; keeps room for kubernetes-internal suffixes.
   return `${prefix}-${compact.slice(0, 50)}`;
@@ -671,6 +671,7 @@ interface SandboxVolume {
   name: string;
   emptyDir?: { medium?: string };
   secret?: { secretName: string };
+  persistentVolumeClaim?: { claimName: string };
 }
 interface TopologySpreadConstraint {
   maxSkew: number;
@@ -753,6 +754,9 @@ export async function runTask(
                 // NODE_EXTRA_CA_CERTS must point at this cert so Node (and any
                 // SEA binary like Claude Code) trusts the vault's TLS intercept.
                 { name: "vault-ca", mountPath: "/etc/vault-ca", readOnly: true },
+                ...(opts.workspace_pvc_name
+                  ? [{ name: "workspace", mountPath: "/work/repo" }]
+                  : []),
               ],
               resources: {
                 // Opencode is mostly idle between LLM round-trips — it's a
@@ -785,6 +789,9 @@ export async function runTask(
           volumes: [
             { name: "lap-shared", emptyDir: { medium: "Memory" } },
             { name: "vault-ca", secret: { secretName: "vault-ca" } },
+            ...(opts.workspace_pvc_name
+              ? [{ name: "workspace", persistentVolumeClaim: { claimName: opts.workspace_pvc_name } }]
+              : []),
           ],
         },
       },
@@ -1706,4 +1713,58 @@ export async function deleteInlineHarnessDeployment(): Promise<void> {
       .deleteNamespacedService({ name: INLINE_HARNESS_NAME, namespace: ns })
       .catch((err: unknown) => { if (!isNotFound(err)) throw err; }),
   ]);
+}
+
+// Idempotent – AlreadyExists treated as success
+export async function ensureWorkspacePvc(agent_id: string): Promise<string> {
+  const ns = env.K8S_NAMESPACE;
+  const name = workspacePvcName(agent_id);
+  const pvc: k8s.V1PersistentVolumeClaim = {
+    apiVersion: "v1",
+    kind: "PersistentVolumeClaim",
+    metadata: {
+      name,
+      namespace: ns,
+      labels: {
+        [LABEL_AGENT_ID]: agent_id,
+      },
+    },
+    spec: {
+      accessModes: ["ReadWriteOnce"],
+      resources: {
+        requests: {
+          storage: "10Gi",
+        },
+      },
+    },
+  };
+
+  try {
+    await coreApi().createNamespacedPersistentVolumeClaim({
+      namespace: ns,
+      body: pvc,
+    });
+  } catch (err) {
+    if (!isAlreadyExists(err)) throw err;
+  }
+  return name;
+}
+
+// 404-safe delete
+export async function deleteWorkspacePvc(agent_id: string): Promise<void> {
+  const ns = env.K8S_NAMESPACE;
+  const name = workspacePvcName(agent_id);
+  try {
+    await coreApi().deleteNamespacedPersistentVolumeClaim({
+      name,
+      namespace: ns,
+    });
+  } catch (err) {
+    if (!isNotFound(err)) throw err;
+  }
+}
+
+// PVC name from agent ID (uses existing toName() compression)
+export function workspacePvcName(agent_id: string): string {
+  return toName("ws", agent_id);
 }

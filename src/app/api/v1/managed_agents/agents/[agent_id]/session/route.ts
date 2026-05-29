@@ -38,6 +38,7 @@ import {
   runTask,
   waitHttpReady,
   waitRunningGetUrl,
+  ensureWorkspacePvc,
 } from "@/server/k8s";
 import { putCachedSession } from "@/server/sessionCache";
 import {
@@ -300,7 +301,12 @@ async function coldBringUp(
 
     let t = Date.now();
     await setPhase(session_id, "creating_sandbox");
-    const { task_arn } = await runTask({ agent, session_id, env_vars: body.env_vars });
+    const pvcName = await ensureWorkspacePvc(agent.agent_id);
+    if (!agent.workspace_pvc) {
+      await prisma.agent.update({ where: { agent_id: agent.agent_id }, data: { workspace_pvc: pvcName } });
+      agent.workspace_pvc = pvcName;
+    }
+    const { task_arn } = await runTask({ agent, session_id, env_vars: body.env_vars, workspace_pvc_name: pvcName });
     registry.observe("session_phase_duration_seconds", { phase: "creating_sandbox" }, (Date.now() - t) / 1000);
 
     await prisma.session.update({ where: { session_id }, data: { task_arn } });
