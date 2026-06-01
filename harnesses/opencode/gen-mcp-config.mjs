@@ -113,6 +113,25 @@ if (issueBase && issueAccess) {
   };
 }
 
+// --- LAP session task MCP (local) ---
+// Same env contract as lap-issue-reporter. Exposes save_task_progress,
+// list_blocked_tasks, get_blocked_task for session checkpointing.
+if (issueBase && issueAccess) {
+  out["lap-session-task"] = {
+    type: "local",
+    command: ["node", `${MCP_DIR}/session-task-mcp.mjs`],
+    enabled: true,
+    environment: {
+      LAP_BASE_URL: issueBase,
+      LAP_ACCESS_TOKEN: issueAccess,
+      ...(process.env.SESSION_ID && { SESSION_ID: process.env.SESSION_ID }),
+      ...(process.env.LAP_REFRESH_TOKEN && { LAP_REFRESH_TOKEN: process.env.LAP_REFRESH_TOKEN }),
+      ...(process.env.HTTPS_PROXY && { HTTPS_PROXY: process.env.HTTPS_PROXY }),
+      ...(process.env.NODE_EXTRA_CA_CERTS && { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS }),
+    },
+  };
+}
+
 // --- LiteLLM gateway MCP servers (remote) ---
 const rawBase = process.env.LITELLM_API_BASE || "";
 const key = process.env.LITELLM_API_KEY || "";

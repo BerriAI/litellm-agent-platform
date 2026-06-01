@@ -158,6 +158,7 @@ model Session {
   // SessionMessage table — see src/server/sessionStore.ts.
   history            Json?
   pending_assistant_parts Json? // HarnessMessagePart[] accumulated during an in-flight or interrupted stream turn; shown when harness thread is missing the assistant response
+  task_checkpoint    Json?     // { summary, status, blocked_reason, updated_at } — agent's self-reported progress; written via POST .../task_checkpoint
   sandboxes          Json?     // map of sandbox name → sandbox URL: { "litellm-bug": "http://s-xxx.default.svc.cluster.local:4096" }
   created_at         DateTime  @default(now())
   created_by         String?
